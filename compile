@@ -1,0 +1,23 @@
+# Warning: this script DELETES files. Run at your own risk.
+
+clear
+
+echo "=== Compiling asm6 ==="
+rm -f asm6
+gcc -O3 -o asm6 asm6.c
+echo
+
+echo "=== Compiling asm6-qalle ==="
+rm -f asm6-qalle
+gcc -O3 -o asm6-qalle asm6-qalle.c
+echo
+
+echo "=== Compressing asm6 ==="
+rm -f bin/asm6-linux.zip
+7z a -mx -bd -bso0 bin/asm6-linux.zip asm6
+echo
+
+# delete temporary files
+rm asm6
+rm asm6-qalle
+
