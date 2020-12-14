@@ -491,7 +491,7 @@ hexi:       j = hexify(*s);
             errmsg = OutOfRange;
     } else if(*s == '%') {  // binary----------------------
         s++;
-    do {
+        do {
 bin:        j = *s;
             s++;
             chars++;
@@ -695,68 +695,71 @@ int eval(char **str, int precedence) {
         op = getoperator(&s);
         if(precedence < prec[op]) {
             val2 = eval(&s, prec[op]);
-            if(!dependant) switch(op) {
-                case AND:
-                    ret &= val2;
-                    break;
-                case ANDAND:
-                    ret = ret && val2;
-                    break;
-                case OR:
-                    ret |= val2;
-                    break;
-                case OROR:
-                    ret = ret || val2;
-                    break;
-                case XOR:
-                    ret ^= val2;
-                    break;
-                case PLUS:
-                    ret += val2;
-                    break;
-                case MINUS:
-                    ret -= val2;
-                    break;
-                case MUL:
-                    ret *= val2;
-                    break;
-                case DIV:
-                    if(!val2)
-                        errmsg = DivZero;
-                    else
-                        ret /= val2;
-                    break;
-                case MOD:
-                    if(!val2)
-                        errmsg = DivZero;
-                    else
-                        ret %= val2;
-                    break;
-                case EQUAL:
-                    ret = (ret == val2);
-                    break;
-                case NOTEQUAL:
-                    ret = (ret != val2);
-                    break;
-                case GREATER:
-                    ret = ret > val2;
-                    break;
-                case GREATEREQ:
-                    ret = ret >= val2;
-                    break;
-                case LESS:
-                    ret = ret < val2;
-                    break;
-                case LESSEQ:
-                    ret = ret <= val2;
-                    break;
-                case LEFTSHIFT:
-                    ret <<= val2;
-                    break;
-                case RIGHTSHIFT:
-                    ret >>= val2;
-                    break;
-            } else ret = 0;
+            if(!dependant)
+                switch(op) {
+                    case AND:
+                        ret &= val2;
+                        break;
+                    case ANDAND:
+                        ret = ret && val2;
+                        break;
+                    case OR:
+                        ret |= val2;
+                        break;
+                    case OROR:
+                        ret = ret || val2;
+                        break;
+                    case XOR:
+                        ret ^= val2;
+                        break;
+                    case PLUS:
+                        ret += val2;
+                        break;
+                    case MINUS:
+                        ret -= val2;
+                        break;
+                    case MUL:
+                        ret *= val2;
+                        break;
+                    case DIV:
+                        if(!val2)
+                            errmsg = DivZero;
+                        else
+                            ret /= val2;
+                        break;
+                    case MOD:
+                        if(!val2)
+                            errmsg = DivZero;
+                        else
+                            ret %= val2;
+                        break;
+                    case EQUAL:
+                        ret = (ret == val2);
+                        break;
+                    case NOTEQUAL:
+                        ret = (ret != val2);
+                        break;
+                    case GREATER:
+                        ret = ret > val2;
+                        break;
+                    case GREATEREQ:
+                        ret = ret >= val2;
+                        break;
+                    case LESS:
+                        ret = ret < val2;
+                        break;
+                    case LESSEQ:
+                        ret = ret <= val2;
+                        break;
+                    case LEFTSHIFT:
+                        ret <<= val2;
+                        break;
+                    case RIGHTSHIFT:
+                        ret >>= val2;
+                        break;
+                }
+            else
+                ret = 0;
         }
     } while(precedence < prec[op] && !errmsg);
     return ret;
@@ -786,12 +789,14 @@ void getfilename(char *dst, char **next) {
         end = strchr(s, '"');
         if(end) {
             len = (int)(end - s);
-            memcpy(dst, s, len); dst[len] = 0;
+            memcpy(dst, s, len);
+            dst[len] = 0;
             *next = end + 1;
         } else {  // no end quote.. grab everything minus trailing whitespace
             end = strend(s, whitesp);
             len = (int)(end - s);
-            memcpy(dst, s, len); dst[len] = 0;
+            memcpy(dst, s, len);
+            dst[len] = 0;
             *next = end;
         }
     } else {
@@ -846,7 +851,9 @@ int getlabel(char *dst, char **src) {
     s = dst;  // +label, -label
     c = *s;
     if(c == '+' || c == '-') {
-        do s++; while(*s == c);
+        do
+            s++;
+        while(*s == c);
         if(!*s)  // just ++.. or --.., no text
             return 1;
     }
@@ -882,14 +889,17 @@ char *expandline(char *dst, char *src) {
             c = 1;  // don't terminate yet
         } else if(c == '"' || c == '\'') {  // read past quotes
             *dst = c;
-            dst++; src++;
+            dst++;
+            src++;
             do {
                 *dst = c2 = *src;
                 if(c2 == '\\') {
-                    dst++; src++;
+                    dst++;
+                    src++;
                     *dst = *src;
                 }
-                dst++; src++;
+                dst++;
+                src++;
             } while(c2 && c2 != c);
             c = c2;
         } else if(c == '_' || c == '.' || c == LOCALCHAR || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {  // symbol
@@ -1240,104 +1250,107 @@ void processline(char *src, char *errsrc, int errline) {
     s = line;
     if(errmsg) {  // expandline error?
         showerror(errsrc, errline);
-    } else do {
-        if(makemacro) {  // we're inside a macro definition
-            p = getreserved(&s);
-            errmsg = endmac = 0;
-            if(!p) {  // skip over label if there is one, we're looking for "ENDM"
-                endmac = s;
+    } else
+        do {
+            if(makemacro) {  // we're inside a macro definition
                 p = getreserved(&s);
-            }
-            if(p) if((*p).value == (ptrdiff_t)endm) {
-                comment = 0;
-                if(endmac) {
-                    endmac[0] = '\n';
-                    endmac[1] = 0;  // hide "ENDM" in case of "label: ENDM"
-                } else
-                    makemacro = 0;  // don't bother adding the last line
-            }
-            if(makemacro && makemacro != true_ptr) {
-                if(comment)
-                    strcat(line, comment);  // keep comment for listing
-                *makemacro = my_malloc(strlen(line) + sizeof(char*) + 1);
-                makemacro = (char**)*makemacro;
-                *makemacro = 0;
-                strcpy((char*)&makemacro[1], line);
-            }
-            if(p) if((*p).value == (ptrdiff_t)endm)
-                makemacro = 0;
-            break;
-        }  // makemacro
-        if(reptcount) {  // REPT definition is in progress?
-            p = getreserved(&s);
-            errmsg = endmac = 0;
-            if(!p) {
-                endmac = s;
-                p = getreserved(&s);
-            }
-            if(p) {
-                if((*p).value == (ptrdiff_t)rept) {
-                    ++reptcount;  // keep track of how many ENDR's are needed to finish
-                } else if((*p).value == (ptrdiff_t)endr) {
-                    if(!(--reptcount)) {
+                errmsg = endmac = 0;
+                if(!p) {  // skip over label if there is one, we're looking for "ENDM"
+                    endmac = s;
+                    p = getreserved(&s);
+                }
+                if(p)
+                    if((*p).value == (ptrdiff_t)endm) {
                         comment = 0;
                         if(endmac) {
-                            endmac[0] = '\n';  // hide "ENDR" in case of "label: ENDR"
-                            endmac[1] = 0;
+                            endmac[0] = '\n';
+                            endmac[1] = 0;  // hide "ENDM" in case of "label: ENDM"
+                        } else
+                            makemacro = 0;  // don't bother adding the last line
+                    }
+                if(makemacro && makemacro != true_ptr) {
+                    if(comment)
+                        strcat(line, comment);  // keep comment for listing
+                    *makemacro = my_malloc(strlen(line) + sizeof(char*) + 1);
+                    makemacro = (char**)*makemacro;
+                    *makemacro = 0;
+                    strcpy((char*)&makemacro[1], line);
+                }
+                if(p)
+                    if((*p).value == (ptrdiff_t)endm)
+                        makemacro = 0;
+                break;
+            }  // makemacro
+            if(reptcount) {  // REPT definition is in progress?
+                p = getreserved(&s);
+                errmsg = endmac = 0;
+                if(!p) {
+                    endmac = s;
+                    p = getreserved(&s);
+                }
+                if(p) {
+                    if((*p).value == (ptrdiff_t)rept) {
+                        ++reptcount;  // keep track of how many ENDR's are needed to finish
+                    } else if((*p).value == (ptrdiff_t)endr) {
+                        if(!(--reptcount)) {
+                            comment = 0;
+                            if(endmac) {
+                                endmac[0] = '\n';  // hide "ENDR" in case of "label: ENDR"
+                                endmac[1] = 0;
+                            }
                         }
                     }
                 }
+                if(reptcount || endmac) {  // add this line to REPT body
+                    if(comment)
+                        strcat(line, comment);  // keep comment for listing
+                    *makerept = my_malloc(strlen(line) + sizeof(char*) + 1);
+                    makerept = (char**)*makerept;
+                    *makerept = 0;
+                    strcpy((char*)&makerept[1], line);
+                }
+                if(!reptcount) {  // end of REPT, expand the whole thing right now
+                    expandrept(errline, errsrc);
+                }
+                break;
             }
-            if(reptcount || endmac) {  // add this line to REPT body
-                if(comment)
-                    strcat(line, comment);  // keep comment for listing
-                *makerept = my_malloc(strlen(line) + sizeof(char*) + 1);
-                makerept = (char**)*makerept;
-                *makerept = 0;
-                strcpy((char*)&makerept[1], line);
-            }
-            if(!reptcount) {  // end of REPT, expand the whole thing right now
-                expandrept(errline, errsrc);
-            }
-            break;
-        }
-        labelhere = 0;  // for non-label symbol definitions (EQU, =, etc)
-        s2 = s;
-        p = getreserved(&s);
-        errmsg = 0;
-        if(skipline[iflevel]) {  // conditional assembly.. no code generation
-            if(!p) {  // it was a label... ignore it and move on
-                p = getreserved(&s);
-                if(!p)
+            labelhere = 0;  // for non-label symbol definitions (EQU, =, etc)
+            s2 = s;
+            p = getreserved(&s);
+            errmsg = 0;
+            if(skipline[iflevel]) {  // conditional assembly.. no code generation
+                if(!p) {  // it was a label... ignore it and move on
+                    p = getreserved(&s);
+                    if(!p)
+                        break;
+                }
+                if((*p).value != (ptrdiff_t)_else && (*p).value != (ptrdiff_t)elseif && (*p).value != (ptrdiff_t)endif
+                && (*p).value != (ptrdiff_t)_if && (*p).value != (ptrdiff_t)ifdef && (*p).value != (ptrdiff_t)ifndef)
                     break;
             }
-            if((*p).value != (ptrdiff_t)_else && (*p).value != (ptrdiff_t)elseif && (*p).value != (ptrdiff_t)endif
-            && (*p).value != (ptrdiff_t)_if && (*p).value != (ptrdiff_t)ifdef && (*p).value != (ptrdiff_t)ifndef)
-                break;
-        }
-        if(!p) {  // maybe a label?
-            if(getlabel(word, &s2))
-                addlabel(word, insidemacro);
-            if(errmsg)
-                goto badlabel;  // fucked up label
-            p = getreserved(&s);
-        }
-        if(p) {
-            if((*p).type == MACRO)
-                expandmacro(p, &s, errline, errsrc);
-            else
-                ((icfn)(*p).value)(p, &s);
-        }
-        if(!errmsg) {  // check extra garbage
-            s += strspn(s, whitesp);
-            if(*s)
-                errmsg = "Extra characters on line.";
-        }
+            if(!p) {  // maybe a label?
+                if(getlabel(word, &s2))
+                    addlabel(word, insidemacro);
+                if(errmsg)
+                    goto badlabel;  // fucked up label
+                p = getreserved(&s);
+            }
+            if(p) {
+                if((*p).type == MACRO)
+                    expandmacro(p, &s, errline, errsrc);
+                else
+                    ((icfn)(*p).value)(p, &s);
+            }
+            if(!errmsg) {  // check extra garbage
+                s += strspn(s, whitesp);
+                if(*s)
+                    errmsg = "Extra characters on line.";
+            }
 badlabel:
-        if(errmsg) {
-            showerror(errsrc, errline);
-        }
-    } while(0);
+            if(errmsg) {
+                showerror(errsrc, errline);
+            }
+        } while(0);
 }
 
 void showhelp(void) {
@@ -1684,16 +1697,18 @@ void incbin(label *id, char **next) {
         seekpos = 0;
         if(eatchar(next, ','))
             seekpos = eval(next, WHOLEEXP);
-        if(!errmsg && !dependant) if(seekpos < 0 || seekpos > filesize)
-            errmsg = SeekOutOfRange;
+        if(!errmsg && !dependant)
+            if(seekpos < 0 || seekpos > filesize)
+                errmsg = SeekOutOfRange;
         if(errmsg)
             break;
         fseek(f, seekpos, SEEK_SET);
         // get size:
         if(eatchar(next, ',')) {
             bytesleft = eval(next, WHOLEEXP);
-            if(!errmsg && !dependant) if(bytesleft < 0 || bytesleft > (filesize - seekpos))
-                errmsg = BadIncbinSize;
+            if(!errmsg && !dependant)
+                if(bytesleft < 0 || bytesleft > (filesize - seekpos))
+                    errmsg = BadIncbinSize;
             if(errmsg)
                 break;
         } else {
@@ -1721,24 +1736,25 @@ void hex(label *id, char **next) {
     getword(buff, next, 0);
     if(!*buff)
         errmsg = MissingOperand;
-    else do {
-        src = buff;
-        dst = 0;
+    else
         do {
-            c1 = hexify(*src);
-            src++;
-            if(*src) {
-                c2 = hexify(*src);
+            src = buff;
+            dst = 0;
+            do {
+                c1 = hexify(*src);
                 src++;
-            } else {  // deal with odd number of chars
-                c2 = c1;
-                c1 = 0;
-            }
-            buff[dst++] = (c1 << 4) + c2;
-        } while(*src);
-        output((byte*)buff, dst);
-        getword(buff, next, 0);
-    } while(*buff);
+                if(*src) {
+                    c2 = hexify(*src);
+                    src++;
+                } else {  // deal with odd number of chars
+                    c2 = c1;
+                    c1 = 0;
+                }
+                buff[dst++] = (c1 << 4) + c2;
+            } while(*src);
+            output((byte*)buff, dst);
+            getword(buff, next, 0);
+        } while(*buff);
 }
 
 void dw(label *id, char **next) {
@@ -1825,8 +1841,9 @@ void dsw(label *id, char **next) {
         count = 0;
     if(eatchar(next, ','))
         val = eval(next, WHOLEEXP);
-    if(!errmsg && !dependant) if(val > 65535 || val < -32768 || count < 0)
-        errmsg = OutOfRange;
+    if(!errmsg && !dependant)
+        if(val > 65535 || val < -32768 || count < 0)
+            errmsg = OutOfRange;
     if(errmsg)
         return;
     while(count--)
@@ -1839,8 +1856,9 @@ void filler(int count, char **next) {
         count = 0;
     if(eatchar(next, ','))
         val = eval(next, WHOLEEXP);
-    if(!errmsg && !dependant) if(val > 255 || val < -128 || count < 0 || count > 0x100000)
-        errmsg = OutOfRange;
+    if(!errmsg && !dependant)
+        if(val > 255 || val < -128 || count < 0 || count > 0x100000)
+            errmsg = OutOfRange;
     if(errmsg)
         return;
     while(count--)  // !#@$
