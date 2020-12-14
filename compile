@@ -2,22 +2,30 @@
 
 clear
 
-echo "=== Compiling asm6 ==="
-rm -f asm6
-gcc -O3 -o asm6 asm6.c
+echo "=== Comparing source of asm6 with asm6-qalle (ignoring all whitespace) ==="
+echo
+diff --ignore-all-space asm6.c asm6-qalle.c
 echo
 
-echo "=== Compiling asm6-qalle ==="
-rm -f asm6-qalle
-gcc -O3 -o asm6-qalle asm6-qalle.c
+echo "=== Comparing compiled asm6 with asm6-qalle ==="
+# compile both with same filename or binaries will differ
+#
+cp asm6.c temp.c
+gcc -o temp-orig temp.c
+rm temp.c
+#
+cp asm6-qalle.c temp.c
+gcc -o temp-qalle temp.c
+rm temp.c
+#
+diff temp-orig temp-qalle
+rm temp-orig temp-qalle
 echo
 
-echo "=== Compressing asm6 ==="
-rm -f bin/asm6-linux.zip
-7z a -mx -bd -bso0 bin/asm6-linux.zip asm6
+echo "=== Compiling and compressing asm6 ==="
+# optimize for size, suppress warning about unused return value
+gcc -Os -Wno-unused-result -o asm6 asm6.c
+gzip --best asm6
+mv asm6.gz bin/
 echo
-
-# delete temporary files
-rm asm6
-rm asm6-qalle
 

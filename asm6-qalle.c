@@ -1,4 +1,4 @@
-// Edited by qalle (whitespace only; should not affect functionality).
+// qalle's "fork" (only whitespace edited; the compiled binary is identical to the original).
 
 /*  History:
 1.6
@@ -353,8 +353,7 @@ int defaultfiller;  // default fill value
 int insidemacro = 0;  // macro/rept is being expanded
 int verbose = 1;
 
-static void* ptr_from_bool(int b)
-{
+static void* ptr_from_bool(int b) {
     if(b)
         return true_ptr;
 
@@ -363,8 +362,7 @@ static void* ptr_from_bool(int b)
 
 // Prints printf-style message to stderr, then exits.
 // Closes and deletes output file.
-static void fatal_error(const char fmt [], ...)
-{
+static void fatal_error(const char fmt[], ...) {
     va_list args;
 
     if(outputfile != NULL) {
@@ -382,8 +380,7 @@ static void fatal_error(const char fmt [], ...)
 }
 
 // Prints printf-style message if verbose mode is enabled.
-static void message(const char fmt [], ...)
-{
+static void message(const char fmt[], ...) {
     if(verbose) {
         va_list args;
         va_start(args, fmt);
@@ -393,8 +390,7 @@ static void message(const char fmt [], ...)
 }
 
 // Same as malloc(), but prints error and exits if allocation fails
-static char* my_malloc(size_t s)
-{
+static char* my_malloc(size_t s) {
     char* p = malloc(s ? s : 1);
     if(p == NULL)
         fatal_error("out of memory");
@@ -403,8 +399,7 @@ static char* my_malloc(size_t s)
 }
 
 // Same as common strdup(), but prints error and exits if allocation fails
-static char* my_strdup(const char *in)
-{
+static char* my_strdup(const char *in) {
     size_t size = strlen(in) + 1;
     char* out = my_malloc(size);
         memcpy(out, in, size);
@@ -418,8 +413,7 @@ static char* my_strdup(const char *in)
 // Not all systems support this, so we implement our own always.
 // More problematic to try to use the system's version rather than
 // ours in all cases.
-char *my_strupr(char *string)
-{
+char *my_strupr(char *string) {
     char *s;
 
     if(string == NULL) {
@@ -511,14 +505,16 @@ bin:        j = *s;
             errmsg = OutOfRange;
     } else if(*s == '\'') {  // char-----------------
         s++;
-        if(*s == '\\') s++;
+        if(*s == '\\')
+            s++;
         ret = *s;
         s++;
         if(*s != '\'')
             errmsg = NotANumber;
     } else if(*s == '"') {  // char 2-----------------
         s++;
-        if(*s == '\\') s++;
+        if(*s == '\\')
+            s++;
         ret = *s;
         s++;
         if(*s != '"')
@@ -687,7 +683,8 @@ int eval(char **str, int precedence) {
             }
             if(s2) {  // if it wasn't a +-label
                 ret = eval(&s, UNARY);
-                if(unary == '-') ret = -ret;
+                if(unary == '-')
+                    ret = -ret;
             }
             break;
         default:
@@ -724,12 +721,16 @@ int eval(char **str, int precedence) {
                     ret *= val2;
                     break;
                 case DIV:
-                    if(!val2) errmsg = DivZero;
-                    else ret /= val2;
+                    if(!val2)
+                        errmsg = DivZero;
+                    else
+                        ret /= val2;
                     break;
                 case MOD:
-                    if(!val2) errmsg = DivZero;
-                    else ret %= val2;
+                    if(!val2)
+                        errmsg = DivZero;
+                    else
+                        ret %= val2;
                     break;
                 case EQUAL:
                     ret = (ret == val2);
@@ -768,9 +769,11 @@ void getword(char *dst, char **src, int mcheck) {
     strncpy(dst, *src, WORDMAX - 1);
     dst[WORDMAX - 1] = 0;
     strtok(dst, whitesp);  // no trailing whitespace
-    if(mcheck) strtok(dst, mathy);
+    if(mcheck)
+        strtok(dst, mathy);
     *src += strlen(dst);
-    if(**src == ':') (*src)++;  // cheesy fix for rept/macro listing
+    if(**src == ':')
+        (*src)++;  // cheesy fix for rept/macro listing
 }
 
 // grab string with optional quotes
@@ -816,7 +819,8 @@ label *getreserved(char **src) {
     }
 
     p = findlabel(upp);  // case insensitive reserved word
-    if(!p) p = findlabel(dst);  // or case sensitive macro
+    if(!p)
+        p = findlabel(dst);  // or case sensitive macro
     if(p) {
         if((*p).type == MACRO) {
             if((*p).pass != pass)
@@ -824,7 +828,8 @@ label *getreserved(char **src) {
         } else if((*p).type != RESERVED)
             p = 0;
     }
-    if(!p) errmsg = Illegal;
+    if(!p)
+        errmsg = Illegal;
     return p;
 }
 
@@ -1303,15 +1308,18 @@ void processline(char *src, char *errsrc, int errline) {
         if(skipline[iflevel]) {  // conditional assembly.. no code generation
             if(!p) {  // it was a label... ignore it and move on
                 p = getreserved(&s);
-                if(!p) break;
+                if(!p)
+                    break;
             }
             if((*p).value != (ptrdiff_t)_else && (*p).value != (ptrdiff_t)elseif && (*p).value != (ptrdiff_t)endif
             && (*p).value != (ptrdiff_t)_if && (*p).value != (ptrdiff_t)ifdef && (*p).value != (ptrdiff_t)ifndef)
                 break;
         }
         if(!p) {  // maybe a label?
-            if(getlabel(word, &s2)) addlabel(word, insidemacro);
-            if(errmsg) goto badlabel;  // fucked up label
+            if(getlabel(word, &s2))
+                addlabel(word, insidemacro);
+            if(errmsg)
+                goto badlabel;  // fucked up label
             p = getreserved(&s);
         }
         if(p) {
@@ -1406,8 +1414,11 @@ int main(int argc, char **argv) {
 
     strcpy(str, inputfilename);
     nameptr = strrchr(str, '.');  // nameptr = '.' ptr
-    if(nameptr) if(strchr(nameptr, '\\')) nameptr = 0;  // watch out for "dirname.ext\listfile"
-    if(!nameptr) nameptr = str + strlen(str);  // nameptr = inputfile extension
+    if(nameptr)
+        if(strchr(nameptr, '\\'))
+            nameptr = 0;  // watch out for "dirname.ext\listfile"
+    if(!nameptr)
+        nameptr = str + strlen(str);  // nameptr = inputfile extension
     if(!outputfilename) {
         strcpy(nameptr, ".bin");
         outputfilename = my_strdup(str);
@@ -1426,9 +1437,11 @@ int main(int argc, char **argv) {
             strcpy(nameptr, ".s");
             f = fopen(str, "rb");
         }
-        if(f) inputfilename = my_strdup(str);
+        if(f)
+            inputfilename = my_strdup(str);
     }
-    if(f) fclose(f);
+    if(f)
+        fclose(f);
 
     // main assembly loop:
     p = 0;
@@ -1449,8 +1462,7 @@ int main(int argc, char **argv) {
         p = lastlabel;
         nameptr = inputfilename;
         include(0, &nameptr);  // start assembling srcfile
-        if(errmsg)
-        {
+        if(errmsg) {
             // todo - shouldn't this set error?
             fputs(errmsg, stderr);  // bad inputfile??
         }
@@ -1492,7 +1504,8 @@ void output(byte *p, int size) {
     if(addr < 0) {
         if(!noentry) {  // do this only once
             noentry++;
-            if(lastchance) errmsg = NoOrigin;  // "Origin undefined."
+            if(lastchance)
+                errmsg = NoOrigin;  // "Origin undefined."
         }
         return;
     } */
@@ -1502,7 +1515,8 @@ void output(byte *p, int size) {
         return;
     if(oldpass != pass) {
         oldpass = pass;
-        if(outputfile) fclose(outputfile);
+        if(outputfile)
+            fclose(outputfile);
         outputfile = fopen(outputfilename, "wb");
         outcount = 0;
         if(!outputfile) {
@@ -1510,9 +1524,10 @@ void output(byte *p, int size) {
             return;
         }
     }
-    if(!outputfile) return;
+    if(!outputfile)
+        return;
     while(size--) {
-        if(listfile && listcount<LISTMAX)
+        if(listfile && listcount < LISTMAX)
             listbuff[listcount] = *p;
         listcount++;
         outputbuff[outcount++] = *p;
@@ -1526,8 +1541,7 @@ void output(byte *p, int size) {
 }
 
 /* Outputs integer as little-endian. See readme.txt for proper usage. */
-static void output_le(int n, int size)
-{
+static void output_le(int n, int size) {
     byte b [2];
     b [0] = n;
     b [1] = n >> 8;
@@ -1543,7 +1557,8 @@ void listline(char *src, char *comment) {
         return;
     if(oldpass != pass) {  // new pass = new listfile
         oldpass = pass;
-        if(listfile) fclose(listfile);
+        if(listfile)
+            fclose(listfile);
         listfile = fopen(listfilename, "w");
         if(!listfile) {
             listfilename = 0;  // stop trying
@@ -1573,7 +1588,8 @@ void listline(char *src, char *comment) {
         else
             fprintf(listfile, "%05X", (int)addr);
         strcpy(srcbuff, src);  // make a copy of the original source line
-        if(comment) strcat(srcbuff, comment);
+        if(comment)
+            strcat(srcbuff, comment);
     } else {
         fclose(listfile);
         message("%s written.\n", listfilename);
@@ -1670,27 +1686,31 @@ void incbin(label *id, char **next) {
             seekpos = eval(next, WHOLEEXP);
         if(!errmsg && !dependant) if(seekpos < 0 || seekpos > filesize)
             errmsg = SeekOutOfRange;
-        if(errmsg) break;
+        if(errmsg)
+            break;
         fseek(f, seekpos, SEEK_SET);
         // get size:
         if(eatchar(next, ',')) {
             bytesleft = eval(next, WHOLEEXP);
             if(!errmsg && !dependant) if(bytesleft < 0 || bytesleft > (filesize - seekpos))
                 errmsg = BadIncbinSize;
-            if(errmsg) break;
+            if(errmsg)
+                break;
         } else {
             bytesleft = filesize - seekpos;
         }
         // read file:
         while(bytesleft) {
-            if(bytesleft > BUFFSIZE) i = BUFFSIZE;
+            if(bytesleft > BUFFSIZE)
+                i = BUFFSIZE;
             else i = bytesleft;
             fread(inputbuff, 1, i, f);
             output(inputbuff, i);
             bytesleft -= i;
         }
     } while(0);
-    if(f) fclose(f);
+    if(f)
+        fclose(f);
 }
 
 void hex(label *id, char **next) {
@@ -1699,7 +1719,8 @@ void hex(label *id, char **next) {
     int dst;
     char c1, c2;
     getword(buff, next, 0);
-    if(!*buff) errmsg = MissingOperand;
+    if(!*buff)
+        errmsg = MissingOperand;
     else do {
         src = buff;
         dst = 0;
@@ -1764,15 +1785,19 @@ void db(label *id, char **next) {
             do {
                 c = *s;
                 s++;
-                if(!c) errmsg = IncompleteExp;
-                if(c == '\\') s++;
+                if(!c)
+                    errmsg = IncompleteExp;
+                if(c == '\\')
+                    s++;
             } while(!errmsg && c != quote);
-            if(errmsg) continue;
+            if(errmsg)
+                continue;
             s--;  // point to the "
             *s = '0';
             *next = (char*)s;
             val2 = eval(next, WHOLEEXP);
-            if(errmsg) continue;
+            if(errmsg)
+                continue;
             while(start != s) {
                 if(*start == '\\')
                     start++;
@@ -1802,7 +1827,8 @@ void dsw(label *id, char **next) {
         val = eval(next, WHOLEEXP);
     if(!errmsg && !dependant) if(val > 65535 || val < -32768 || count < 0)
         errmsg = OutOfRange;
-    if(errmsg) return;
+    if(errmsg)
+        return;
     while(count--)
          output_le(val, 2);
 }
@@ -1815,7 +1841,8 @@ void filler(int count, char **next) {
         val = eval(next, WHOLEEXP);
     if(!errmsg && !dependant) if(val > 255 || val < -128 || count < 0 || count > 0x100000)
         errmsg = OutOfRange;
-    if(errmsg) return;
+    if(errmsg)
+        return;
     while(count--)  // !#@$
          output_le(val, 1);
 }
@@ -1832,7 +1859,8 @@ void align(label *id, char **next) {
     dependant = 0;
     count = eval(next, WHOLEEXP);
     if(count >= 0) {
-        if((unsigned int)addr%count) count -= (unsigned int)addr%count;
+        if((unsigned int)addr%count)
+            count -= (unsigned int)addr%count;
         else count = 0;
     } else count = 0;
     filler(count, next);
@@ -1850,8 +1878,10 @@ void pad(label *id, char **next) {
 }
 
 void org(label *id, char **next) {
-    if(addr < 0) base(id, next);  // this is the first ORG; PC hasn't been set yet
-    else pad(id, next);
+    if(addr < 0)
+        base(id, next);  // this is the first ORG; PC hasn't been set yet
+    else
+        pad(id, next);
 }
 
 void opcode(label *id, char **next) {
@@ -1869,15 +1899,15 @@ void opcode(label *id, char **next) {
         type = op[1];
         s = tmpstr;
         if(type != IMP && type != ACC) {  // get operand
-            if(!eatchar(&s, ophead[type])) continue;
+            if(!eatchar(&s, ophead[type]))
+                continue;
             val = eval(&s, WHOLEEXP);
             if(type == REL) {
                 if(!dependant) {
                     val -= addr + 2;
                     if(val > 127 || val < -128) {
                         needanotherpass = 1;  // give labels time to sort themselves out..
-                        if(lastchance)
-                        {
+                        if(lastchance) {
                             errmsg = "Branch out of range.";
                             forceRel = 1;
                         }
@@ -1897,7 +1927,8 @@ void opcode(label *id, char **next) {
                         errmsg = OutOfRange;
                 }
             }
-            if(errmsg && !dependant && !forceRel) continue;
+            if(errmsg && !dependant && !forceRel)
+                continue;
         }
 
         my_strupr(s);
@@ -1908,7 +1939,8 @@ void opcode(label *id, char **next) {
             s2++;
         }
         s += strspn(s, whitesp);
-        if(*s || *s2) continue;
+        if(*s || *s2)
+            continue;
 
         if(addr > 0xffff)
             errmsg = "PC out of range.";
@@ -1988,8 +2020,10 @@ void _else(label *id, char **next) {
 }
 
 void endif(label *id, char **next) {
-    if(iflevel) --iflevel;
-    else errmsg = "ENDIF without IF.";
+    if(iflevel)
+        --iflevel;
+    else
+        errmsg = "ENDIF without IF.";
 }
 
 void endm(label *id, char **next) {  // ENDM is handled during macro definition (see processline)
@@ -2069,16 +2103,19 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
         s += strspn(s, whitesp);  // eatwhitespace    s = param start
         s2 = s;  // s2 = param end
         s3 = strpbrk(s2, ",'\"");  // stop at param end or string definition
-        if(!s3) s3 = strchr(s2, 0);
+        if(!s3)
+            s3 = strchr(s2, 0);
         c = *s3;
         if(c == '"' || c == '\'') {  // go to end of string
             s3++;
             do {
                 c2 = *s3;
                 s3++;
-                if(c2 == '\\') s3++;
+                if(c2 == '\\')
+                    s3++;
             } while(c2 && c2 != c);
-            if(!c2) s3--;  // oops..too far
+            if(!c2)
+                s3--;  // oops.. too far
             c = *s3;
         }
         s2 = s3;

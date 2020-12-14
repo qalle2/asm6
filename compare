@@ -1,9 +1,0 @@
-clear
-echo "=== diff (ignore all whitespace) ==="
-diff --ignore-all-space asm6.c asm6-qalle.c
-echo
-
-echo "=== diff (ignore trailing whitespace) ==="
-diff --ignore-trailing-space --suppress-common-lines --side-by-side asm6.c asm6-qalle.c
-echo
-
