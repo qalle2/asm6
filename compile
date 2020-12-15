@@ -9,13 +9,14 @@ echo
 
 echo "=== Comparing compiled asm6 with asm6-qalle ==="
 # compile both with same filename or binaries will differ
+# optimize for size, suppress warning about unused return value
 #
 cp asm6.c temp.c
-gcc -o temp-orig temp.c
+gcc -Os -Wno-unused-result -o temp-orig temp.c
 rm temp.c
 #
 cp asm6-qalle.c temp.c
-gcc -o temp-qalle temp.c
+gcc -Os -Wno-unused-result -o temp-qalle temp.c
 rm temp.c
 #
 diff temp-orig temp-qalle
