@@ -1,5 +1,5 @@
 /* qalle's "fork".
-The compiled binary is identical to the original (must use -Os with gcc).
+The compiled binary is identical to the original (gcc, default settings).
 Changes:
     - whitespace
     - move and add comments
@@ -67,17 +67,7 @@ Changes:
 
 #define eatwhitespace(str) (*str += strspn(*str, whitesp))
 
-// --- Global variables/structs/enums; function declarations --------------------------------------
-
-static void* true_ptr = &true_ptr;
-
-enum labeltypes {
-    LABEL,    // known address
-    VALUE,    // defined with '='
-    EQUATE,   // made with EQU
-    MACRO,    // macro (duh)
-    RESERVED  // reserved word
-};
+// --- label struct -------------------------------------------------------------------------------
 
 typedef struct {
     const char *name;  // label name
@@ -94,6 +84,70 @@ typedef struct {
     void *link;        // labels that share the same name (local labels) are chained together
 } label;
 
+// --- Function declarations (in the order they're defined) ---------------------------------------
+
+int   getvalue    (char**);
+int   getoperator (char**);
+int   eval        (char**, int);
+void  getword     (char*, char**, int);
+label *getreserved(char**);
+int   getlabel    (char*, char**);
+
+void  initlabels();
+label *findlabel(char*);
+label *newlabel ();
+
+void processline(char*, char*, int);
+void listline   (char*, char*);
+void endlist    ();                   // there's no such function -qalle
+
+// referred to in directives[] unless otherwise noted
+void equ         (label*, char**);
+void equal       (label*, char**);  // "="
+void base        (label*, char**);
+void nothing     (label*, char**);
+void include     (label*, char**);
+void incbin      (label*, char**);
+void hex         (label*, char**);
+void dw          (label*, char**);
+void dl          (label*, char**);
+void dh          (label*, char**);
+void db          (label*, char**);
+void dsw         (label*, char**);
+void dsb         (label*, char**);
+void align       (label*, char**);
+void pad         (label*, char**);
+void org         (label*, char**);
+void opcode      (label*, char**);  // not in directives[]
+void _if         (label*, char**);
+void ifdef       (label*, char**);
+void ifndef      (label*, char**);
+void elseif      (label*, char**);
+void _else       (label*, char**);
+void endif       (label*, char**);
+void endm        (label*, char**);
+void endr        (label*, char**);
+void macro       (label*, char**);
+void expandmacro (label*, char**, int, char*);  // not in directives[]
+void rept        (label*, char**);
+void expandrept  (int, char*);      // not in directives[]
+void _enum       (label*, char**);
+void ende        (label*, char**);
+void fillval     (label*, char**);  // "fillvalue"
+void make_error  (label*, char**);  // "error"
+
+// --- Misc globals -------------------------------------------------------------------------------
+
+static void *true_ptr = &true_ptr;
+
+enum labeltypes {
+    LABEL,    // known address
+    VALUE,    // defined with '='
+    EQUATE,   // made with EQU
+    MACRO,    // macro (duh)
+    RESERVED  // reserved word
+};
+
 label firstlabel = {   // '$' label
     "$",               // *name
     0,                 // value
@@ -105,9 +159,9 @@ label firstlabel = {   // '$' label
     0,                 // link
 };
 
-typedef unsigned char byte;
-typedef void          (*icfn)(label*, char**);
+typedef void (*icfn)(label*, char**);
 
+// addressing modes
 enum optypes {
     ACC, IMM, IND, INDX, INDY, ZPX, ZPY, ABSX, ABSY, ZP, ABS, REL, IMP
 };
@@ -121,176 +175,178 @@ char *optail[] = {
     "A", "", ")", ",X)", "),Y", ",X", ",Y", ",X", ",Y", "", "", "", ""
 };
 
-byte brk[] = {
+// opcodes and addressing modes for instructions
+char brk[] = {
     0x00, IMM, 0x00, ZP, 0x00, IMP, -1
 };
-byte ora[] = {
+char ora[] = {
     0x09, IMM, 0x01, INDX, 0x11, INDY, 0x15, ZPX, 0x1d, ABSX, 0x19, ABSY, 0x05, ZP, 0x0d, ABS, -1
 };
-byte asl[] = {
+char asl[] = {
     0x0a, ACC, 0x16, ZPX, 0x1e, ABSX, 0x06, ZP, 0x0e, ABS, 0x0a, IMP, -1
 };
-byte php[] = {
+char php[] = {
     0x08, IMP, -1
 };
-byte bpl[] = {
+char bpl[] = {
     0x10, REL, -1
 };
-byte clc[] = {
+char clc[] = {
     0x18, IMP, -1
 };
-byte jsr[] = {
+char jsr[] = {
     0x20, ABS, -1
 };
-byte and[] = {
+char and[] = {
     0x29, IMM, 0x21, INDX, 0x31, INDY, 0x35, ZPX, 0x3d, ABSX, 0x39, ABSY, 0x25, ZP, 0x2d, ABS, -1
 };
-byte bit[] = {
+char bit[] = {
     0x24, ZP, 0x2c, ABS, -1
 };
-byte rol[] = {
+char rol[] = {
     0x2a, ACC, 0x36, ZPX, 0x3e, ABSX, 0x26, ZP, 0x2e, ABS, 0x2a, IMP, -1
 };
-byte plp[] = {
+char plp[] = {
     0x28, IMP, -1
 };
-byte bmi[] = {
+char bmi[] = {
     0x30, REL, -1
 };
-byte sec[] = {
+char sec[] = {
     0x38, IMP, -1
 };
-byte rti[] = {
+char rti[] = {
     0x40, IMP, -1
 };
-byte eor[] = {
+char eor[] = {
     0x49, IMM, 0x41, INDX, 0x51, INDY, 0x55, ZPX, 0x5d, ABSX, 0x59, ABSY, 0x45, ZP, 0x4d, ABS, -1
 };
-byte lsr[] = {
+char lsr[] = {
     0x4a, ACC, 0x56, ZPX, 0x5e, ABSX, 0x46, ZP, 0x4e, ABS, 0x4a, IMP, -1
 };
-byte pha[] = {
+char pha[] = {
     0x48, IMP, -1
 };
-byte jmp[] = {
+char jmp[] = {
     0x6c, IND, 0x4c, ABS, -1
 };
-byte bvc[] = {
+char bvc[] = {
     0x50, REL, -1
 };
-byte cli[] = {
+char cli[] = {
     0x58, IMP, -1
 };
-byte rts[] = {
+char rts[] = {
     0x60, IMP, -1
 };
-byte adc[] = {
+char adc[] = {
     0x69, IMM, 0x61, INDX, 0x71, INDY, 0x75, ZPX, 0x7d, ABSX, 0x79, ABSY, 0x65, ZP, 0x6d, ABS, -1
 };
-byte ror[] = {
+char ror[] = {
     0x6a, ACC, 0x76, ZPX, 0x7e, ABSX, 0x66, ZP, 0x6e, ABS, 0x6a, IMP, -1
 };
-byte pla[] = {
+char pla[] = {
     0x68, IMP, -1
 };
-byte bvs[] = {
+char bvs[] = {
     0x70, REL, -1
 };
-byte sei[] = {
+char sei[] = {
     0x78, IMP, -1
 };
-byte sta[] = {
+char sta[] = {
     0x81, INDX, 0x91, INDY, 0x95, ZPX, 0x9d, ABSX, 0x99, ABSY, 0x85, ZP, 0x8d, ABS, -1
 };
-byte sty[] = {
+char sty[] = {
     0x94, ZPX, 0x84, ZP, 0x8c, ABS, -1
 };
-byte stx[] = {
+char stx[] = {
     0x96, ZPY, 0x86, ZP, 0x8e, ABS, -1
 };
-byte dey[] = {
+char dey[] = {
     0x88, IMP, -1
 };
-byte txa[] = {
+char txa[] = {
     0x8a, IMP, -1
 };
-byte bcc[] = {
+char bcc[] = {
     0x90, REL, -1
 };
-byte tya[] = {
+char tya[] = {
     0x98, IMP, -1
 };
-byte txs[] = {
+char txs[] = {
     0x9a, IMP, -1
 };
-byte ldy[] = {
+char ldy[] = {
     0xa0, IMM, 0xb4, ZPX, 0xbc, ABSX, 0xa4, ZP, 0xac, ABS, -1
 };
-byte lda[] = {
+char lda[] = {
     0xa9, IMM, 0xa1, INDX, 0xb1, INDY, 0xb5, ZPX, 0xbd, ABSX, 0xb9, ABSY, 0xa5, ZP, 0xad, ABS, -1
 };
-byte ldx[] = {
+char ldx[] = {
     0xa2, IMM, 0xb6, ZPY, 0xbe, ABSY, 0xa6, ZP, 0xae, ABS, -1
 };
-byte tay[] = {
+char tay[] = {
     0xa8, IMP, -1
 };
-byte tax[] = {
+char tax[] = {
     0xaa, IMP, -1
 };
-byte bcs[] = {
+char bcs[] = {
     0xb0, REL, -1
 };
-byte clv[] = {
+char clv[] = {
     0xb8, IMP, -1
 };
-byte tsx[] = {
+char tsx[] = {
     0xba, IMP, -1
 };
-byte cpy[] = {
+char cpy[] = {
     0xc0, IMM, 0xc4, ZP, 0xcc, ABS, -1
 };
-byte cmp[] = {
+char cmp[] = {
     0xc9, IMM, 0xc1, INDX, 0xd1, INDY, 0xd5, ZPX, 0xdd, ABSX, 0xd9, ABSY, 0xc5, ZP, 0xcd, ABS, -1
 };
-byte dec[] = {
+char dec[] = {
     0xd6, ZPX, 0xde, ABSX, 0xc6, ZP, 0xce, ABS, -1
 };
-byte iny[] = {
+char iny[] = {
     0xc8, IMP, -1
 };
-byte dex[] = {
+char dex[] = {
     0xca, IMP, -1
 };
-byte bne[] = {
+char bne[] = {
     0xd0, REL, -1
 };
-byte cld[] = {
+char cld[] = {
     0xd8, IMP, -1
 };
-byte cpx[] = {
+char cpx[] = {
     0xe0, IMM, 0xe4, ZP, 0xec, ABS, -1
 };
-byte sbc[] = {
+char sbc[] = {
     0xe9, IMM, 0xe1, INDX, 0xf1, INDY, 0xf5, ZPX, 0xfd, ABSX, 0xf9, ABSY, 0xe5, ZP, 0xed, ABS, -1
 };
-byte inc[] = {
+char inc[] = {
     0xf6, ZPX, 0xfe, ABSX, 0xe6, ZP, 0xee, ABS, -1
 };
-byte inx[] = {
+char inx[] = {
     0xe8, IMP, -1
 };
-byte nop[] = {
+char nop[] = {
     0xea, IMP, -1
 };
-byte beq[] = {
+char beq[] = {
     0xf0, REL, -1
 };
-byte sed[] = {
+char sed[] = {
     0xf8, IMP, -1
 };
 
-void *rsvdlist[] = {  // all reserved words
+// mnemonics for instructions
+void *rsvdlist[] = {
     "BRK", brk,
     "PHP", php,
     "BPL", bpl,
@@ -350,52 +406,6 @@ void *rsvdlist[] = {  // all reserved words
     0,     0
 };
 
-label *findlabel  (char*);
-void  initlabels  ();
-label *newlabel   ();
-void  getword     (char*, char**, int);
-int   getvalue    (char**);
-int   getoperator (char**);
-int   eval        (char**, int);
-label *getreserved(char**);
-int   getlabel    (char*, char**);
-void  processline (char*, char*, int);
-void  listline    (char*, char*);
-void  endlist     ();
-void  opcode      (label*, char**);
-void  org         (label*, char**);
-void  base        (label*, char**);
-void  pad         (label*, char**);
-void  equ         (label*, char**);
-void  equal       (label*, char**);
-void  nothing     (label*, char**);
-void  include     (label*, char**);
-void  incbin      (label*, char**);
-void  dw          (label*, char**);
-void  db          (label*, char**);
-void  dl          (label*, char**);
-void  dh          (label*, char**);
-void  hex         (label*, char**);
-void  dsw         (label*, char**);
-void  dsb         (label*, char**);
-void  align       (label*, char**);
-void  _if         (label*, char**);
-void  ifdef       (label*, char**);
-void  ifndef      (label*, char**);
-void  elseif      (label*, char**);
-void  _else       (label*, char**);
-void  endif       (label*, char**);
-void  macro       (label*, char**);
-void  endm        (label*, char**);
-void  endr        (label*, char**);
-void  rept        (label*, char**);
-void  _enum       (label*, char**);
-void  ende        (label*, char**);
-void  fillval     (label*, char**);
-void  expandmacro (label*, char**, int, char*);
-void  expandrept  (int, char*);
-void  make_error  (label*, char**);
-
 struct {
     char* name;
     void (*func)(label*, char**);
@@ -443,6 +453,7 @@ struct {
     0,           0
 };
 
+// error messages (read only)
 char OutOfRange[]     = "Value out of range.";
 char SeekOutOfRange[] = "Seek position out of range.";
 char BadIncbinSize[]  = "INCBIN size is out of range.";
@@ -468,48 +479,51 @@ char NoENDE[]         = "Missing ENDE.";
 char IfNestLimit[]    = "Too many nested IFs.";
 char undefinedPC[]    = "PC is undefined (use ORG first)";
 
-char whitesp[]  = " \t\r\n:";   // treat ":" like whitespace (for labels)
-char whitesp2[] = " \t\r\n\"";  // (used for filename processing)
-char tmpstr[LINEMAX];           // all purpose big string
+char whitesp[]  = " \t\r\n:";         // for labels (read only)
+char whitesp2[] = " \t\r\n\"";        // for filenames (read only)
 
-int        pass            = 0;
-int        scope;                // current scope, 0 = global
-int        nextscope;            // next nonglobal scope (increment on each new block of localized code)
-int        lastchance      = 0;  // set on final attempt
-int        needanotherpass;      // still need to take care of some things..
-int        error           = 0;  // hard error (stop assembly after this pass)
-char       **makemacro     = 0;  // (during macro creation) where next macro line will go.
-                                 //     1 to skip past macro
-char       **makerept;           // like makemacro.. points to end of string chain
-int        reptcount       = 0;  // counts rept statements during rept string storage
-int        iflevel         = 0;  // index into ifdone[], skipline[]
-int        ifdone[IFNESTS];      // nonzero if current IF level has been true
-int        skipline[IFNESTS];    // 1 on an IF statement that is false
-const char *errmsg;
-char       *inputfilename  = 0;
-char       *outputfilename = 0;
-char       *listfilename   = 0;
-int        verboselisting  = 0;  // expand REPT loops in listing
-const char *listerr        = 0;  // error message for list file
-label      *labelhere;           // points to the label being defined on the current line
-                                 //     (for EQU, =, etc)
-FILE       *listfile       = 0;
-FILE       *outputfile     = 0;
-byte       outputbuff[BUFFSIZE];
-byte       inputbuff[BUFFSIZE];
-int        outcount;             // bytes waiting in outputbuff
-label      **labellist;          // array of label pointers (list starts from center and grows outward)
-int        labels;               // # of labels in labellist
-int        maxlabels;            // max # of labels labellist can hold
-int        labelstart;           // index of first label
-int        labelend;             // index of last label
-label      *lastlabel;           // last label created
-int        nooutput        = 0;  // supress output (use with ENUM)
-int        defaultfiller;        // default fill value
-int        insidemacro     = 0;  // macro/rept is being expanded
-int        verbose         = 1;
+char          tmpstr[LINEMAX];      // all purpose big string
+int           pass            = 0;
+int           scope;                // current scope, 0 = global
+int           nextscope;            // next nonglobal scope (increment on each new block of
+                                    // localized code)
+int           lastchance      = 0;  // set on final attempt
+int           needanotherpass;      // still need to take care of some things..
+int           error           = 0;  // hard error (stop assembly after this pass)
+char          **makemacro     = 0;  // (during macro creation) where next macro line will go.
+                                    //     1 to skip past macro
+char          **makerept;           // like makemacro.. points to end of string chain
+int           reptcount       = 0;  // counts rept statements during rept string storage
+int           iflevel         = 0;  // index into ifdone[], skipline[]
+int           ifdone[IFNESTS];      // nonzero if current IF level has been true
+int           skipline[IFNESTS];    // 1 on an IF statement that is false
+const char    *errmsg;
+char          *inputfilename  = 0;
+char          *outputfilename = 0;
+char          *listfilename   = 0;
+int           verboselisting  = 0;  // expand REPT loops in listing
+const char    *listerr        = 0;  // error message for list file
+label         *labelhere;           // points to the label being defined on the current line
+                                    //     (for EQU, =, etc)
+FILE          *listfile       = 0;
+FILE          *outputfile     = 0;
+unsigned char outputbuff[BUFFSIZE];
+char          inputbuff[BUFFSIZE];
+int           outcount;             // bytes waiting in outputbuff
+label         **labellist;          // array of label pointers (list starts from center and
+                                    // grows outward)
+int           labels;               // # of labels in labellist
+int           maxlabels;            // max # of labels labellist can hold
+int           labelstart;           // index of first label
+int           labelend;             // index of last label
+label         *lastlabel;           // last label created
+int           nooutput        = 0;  // supress output (use with ENUM)
+int           defaultfiller;        // default fill value
+int           insidemacro     = 0;  // macro/rept is being expanded
+int           verbose         = 1;
 
-char mathy[] = "!^&|+-*/%()<>=,";
+char mathy[] = "!^&|+-*/%()<>=,";  // mathy stuff; read only; used by getword()
+
 // precedence levels
 enum prectypes {
     WHOLEEXP, ORORP, ANDANDP, ORP, XORP, ANDP, EQCOMPARE, COMPARE, SHIFT, PLUSMINUS, MULDIV, UNARY
@@ -526,6 +540,8 @@ char prec[] = {
     PLUSMINUS, PLUSMINUS, MULDIV, MULDIV, MULDIV, ANDP, XORP,
     ORP, ANDANDP, ORORP, SHIFT, SHIFT
 };
+
+typedef unsigned char byte;  // not used anywhere -qalle
 
 // ------------------------------------------------------------------------------------------------
 
@@ -581,13 +597,10 @@ static char *my_strdup(const char *in) {
     return out;
 }
 
-/* -------------------------------------------------------
-parsing functions
-------------------------------------------------------- */
+// --- Parsing functions --------------------------------------------------------------------------
 
-/* Not all systems support this, so we implement our own always.
-More problematic to try to use the system's version rather than
-ours in all cases. */
+/* Not all systems support this, so we implement our own always. More problematic to try to use
+the system's version rather than ours in all cases. */
 
 char *my_strupr(char *string) {
     char *s;
@@ -631,14 +644,11 @@ char *strend(char *str, char *whitespace) {
     return end;
 }
 
-// used by getvalue()
-char gvline[WORDMAX];
-// used by getvalue() and many other functions; set to nonzero if symbol couldn't be resolved
-int dependant;
+char gvline[WORDMAX];  // used by getvalue()
+int dependant;  // used by getvalue() etc.; set to nonzero if symbol couldn't be resolved
 
 int getvalue(char **str) {
-    /* decode str into a number
-    set errmsg on error */
+    // decode str into a number; set errmsg on error
     char *s, *end;
     int ret, chars, j;
     label *p;
@@ -653,7 +663,8 @@ int getvalue(char **str) {
 
     ret = chars = 0;
 
-    if(*s == '$') {  // hex---------------------
+    if(*s == '$') {
+        // hex
         s++;
         if(!*s) {
             ret = addr;  // $ by itself is the PC
@@ -669,7 +680,8 @@ hexi:
         if(chars > 8) {
             errmsg = OutOfRange;
         }
-    } else if(*s == '%') {  // binary----------------------
+    } else if(*s == '%') {
+        // binary
         s++;
         do {
 bin:
@@ -685,7 +697,8 @@ bin:
         if(chars > 32) {
             errmsg = OutOfRange;
         }
-    } else if(*s == '\'') {  // char-----------------
+    } else if(*s == '\'') {
+        // char
         s++;
         if(*s == '\\') {
             s++;
@@ -695,7 +708,8 @@ bin:
         if(*s != '\'') {
             errmsg = NotANumber;
         }
-    } else if(*s == '"') {  // char 2-----------------
+    } else if(*s == '"') {
+        // char 2
         s++;
         if(*s == '\\') {
             s++;
@@ -705,7 +719,8 @@ bin:
         if(*s != '"') {
             errmsg = NotANumber;
         }
-    } else if(*s >= '0' && *s <= '9') {  // number--------------
+    } else if(*s >= '0' && *s <= '9') {
+        // number
         end = s + strlen(s) - 1;
         if(strspn(s, "0123456789") == strlen(s)) {
             ret = atoi(s);
@@ -718,7 +733,8 @@ bin:
         } else {
             errmsg = NotANumber;
         }
-    } else {  // label---------------
+    } else {
+        // label
         p = findlabel(gvline);
         if(!p) {  // label doesn't exist (yet?)
             needanotherpass = dependant = 1;
@@ -810,7 +826,7 @@ int getoperator(char **str) {
         default:
             (*str)--;
             return NOOP;
-    }
+    }  // switch
 }
 
 int eval(char **str, int precedence) {
@@ -881,7 +897,7 @@ int eval(char **str, int precedence) {
             break;
         default:
             ret = getvalue(&s);
-    }
+    }  // switch
 
     do {
         *str = s;
@@ -952,10 +968,10 @@ int eval(char **str, int precedence) {
                     case RIGHTSHIFT:
                         ret >>= val2;
                         break;
-                }
+                }  // switch
             } else {
                 ret = 0;
-            }
+            }  // if...else
         }
     } while(precedence < prec[op] && !errmsg);
 
@@ -1208,10 +1224,11 @@ void reverse(char *dst, char *src) {
     }
 }
 
-// ================================================================================================
+// ------------------------------------------------------------------------------------------------
 
 void addlabel(char *word, int local) {
-    /* local:
+    /* used by processline(), macro(), expandmacro()
+    local:
         false: if label starts with LOCALCHAR, make it local, otherwise it's global
         true: force label to be local (used for macros) */
     char c = *word;
@@ -1280,6 +1297,7 @@ void addlabel(char *word, int local) {
 }
 
 void initlabels(void) {
+    // used by main()
     // initialize label list
     label *p;
     int i = 0;
@@ -1441,9 +1459,11 @@ label *newlabel(void) {
     return p;
 }
 
-// ================================================================================================
+// ------------------------------------------------------------------------------------------------
 
 void showerror(char *errsrc, int errline) {
+    // used by: processfile(), processline()
+
     error = 1;
     fprintf(stderr, "%s(%i): %s\n", errsrc, errline, errmsg);
 
@@ -1456,6 +1476,7 @@ char fileline[LINEMAX];  // used by processfile()
 
 void processfile(FILE *f, char *name) {
     // process the open file f
+    // used by: include()
     static int nest = 0;
     int nline = 0, eof;
 
@@ -1496,12 +1517,11 @@ void processfile(FILE *f, char *name) {
 
 void processline(char *src, char *errsrc, int errline) {
     /* process single line
-    src = source line
-    errsrc = source file name
-    errline = source file line number */
+    used by: processfile(), expandmacro(), expandrept()
+    src = source line, errsrc = source file name, errline = source file line number */
 
-    // line = expanded line
-    char line[LINEMAX], word[WORDMAX], *s, *s2, *comment, *endmac;
+    char line[LINEMAX];  // expanded line
+    char word[WORDMAX], *s, *s2, *comment, *endmac;
     label *p;
 
     errmsg = 0;
@@ -1698,7 +1718,7 @@ int main(int argc, char **argv) {
                     break;
                 default:
                     fatal_error("unknown option: %s", argv[i]);
-            }
+            }  // switch
         } else {
             // converting this into a switch() will change the binary -qalle
             if(notoption == 0) {
@@ -1711,8 +1731,8 @@ int main(int argc, char **argv) {
                 fatal_error("unused argument: %s", argv[i]);
             }
             notoption++;
-        }
-    }
+        }  // if...else
+    }  // for
 
     if(!inputfilename) {
         fatal_error("No source file specified.");
@@ -1726,13 +1746,14 @@ int main(int argc, char **argv) {
     if(!nameptr) {
         nameptr = str + strlen(str);  // nameptr = inputfile extension
     }
+
     if(!outputfilename) {
         strcpy(nameptr, ".bin");
         outputfilename = my_strdup(str);
     }
 
+    // if listfile was wanted but no name was specified, use srcfile.LST
     if(listfilename == true_ptr) {
-        // if listfile was wanted but no name was specified, use srcfile.LST
         strcpy(nameptr, ".lst");
         listfilename = my_strdup(str);
     }
@@ -1810,17 +1831,17 @@ int main(int argc, char **argv) {
         }
         error = 1;
     }
+
     if(listfile) {
         listline(0, 0);
     }
     return error ? EXIT_FAILURE : 0;
 }
 
-// used by output(), listline()
-byte listbuff[LISTMAX];
-int listcount;
+unsigned char listbuff[LISTMAX];  // used by output(), listline()
+int listcount;  // used by output(), listline()
 
-void output(byte *p, int size) {
+void output(unsigned char *p, int size) {
     static int oldpass = 0;
 
     /* static int noentry = 0;
@@ -1873,7 +1894,7 @@ void output(byte *p, int size) {
 
 static void output_le(int n, int size) {
     // Outputs integer as little-endian. See readme.txt for proper usage.
-    byte b[2] = {n, n >> 8};
+    char b[2] = {n, n >> 8};
 
     output(b, size);
 }
@@ -1888,6 +1909,7 @@ void listline(char *src, char *comment) {
     if(!listfilename) {
         return;
     }
+
     if(oldpass != pass) {
         // new pass = new listfile
         oldpass = pass;
@@ -1928,6 +1950,7 @@ void listline(char *src, char *comment) {
         } else {
             fprintf(listfile, "%05X", (int)addr);
         }
+
         strcpy(srcbuff, src);  // make a copy of the original source line
         if(comment) {
             strcat(srcbuff, comment);
@@ -1938,12 +1961,11 @@ void listline(char *src, char *comment) {
     }
 }
 
-/* ------------------------------------------------------
+/* ------------------------------------------------------------------------------------------------
 directive(label *id, char **next)
-
     id = reserved word
     **next = source line (ptr gets moved past directive on exit)
------------------------------------------------------- */
+------------------------------------------------------------------------------------------------ */
 
 void equ(label *id, char **next) {
     char str[LINEMAX], *s = *next;
@@ -1968,6 +1990,8 @@ void equ(label *id, char **next) {
 }
 
 void equal(label *id, char **next) {
+    // "="
+
     if(!labelhere) {  // labelhere = index + 1
         errmsg = NeedName;  // (=) without a name
     } else {
@@ -2020,7 +2044,7 @@ void incbin(label *id, char **next) {
     FILE *f = 0;
 
     do {
-        // file open:
+        // file open
         getfilename(tmpstr, next);
         if(!(f = fopen(tmpstr, "rb"))) {
             errmsg = CantOpen;
@@ -2029,7 +2053,7 @@ void incbin(label *id, char **next) {
         fseek(f, 0, SEEK_END);
         filesize = ftell(f);
 
-        // file seek:
+        // file seek
         seekpos = 0;
         if(eatchar(next, ',')) {
             seekpos = eval(next, WHOLEEXP);
@@ -2042,7 +2066,7 @@ void incbin(label *id, char **next) {
         }
         fseek(f, seekpos, SEEK_SET);
 
-        // get size:
+        // get size
         if(eatchar(next, ',')) {
             bytesleft = eval(next, WHOLEEXP);
             if(!errmsg && !dependant && (bytesleft < 0 || bytesleft > filesize - seekpos)) {
@@ -2055,9 +2079,15 @@ void incbin(label *id, char **next) {
             bytesleft = filesize - seekpos;
         }
 
-        // read file:
+        // read file
         while(bytesleft) {
-            i = (bytesleft > BUFFSIZE) ? BUFFSIZE : bytesleft;
+            // converting this into a ternary expression will change the binary -qalle
+            if(bytesleft > BUFFSIZE) {
+                i = BUFFSIZE;
+            } else {
+                i = bytesleft;
+            }
+
             fread(inputbuff, 1, i, f);
             output(inputbuff, i);
             bytesleft -= i;
@@ -2093,7 +2123,7 @@ void hex(label *id, char **next) {
                 }
                 buff[dst++] = (c1 << 4) + c2;
             } while(*src);
-            output((byte*)buff, dst);
+            output((char*)buff, dst);
             getword(buff, next, 0);
         } while(*buff);
     }
@@ -2115,7 +2145,7 @@ void dw(label *id, char **next) {
 }
 
 void dl(label *id, char **next) {
-    byte val;
+    char val;
 
     do {
         val = eval(next, WHOLEEXP) & 0xff;
@@ -2126,7 +2156,7 @@ void dl(label *id, char **next) {
 }
 
 void dh(label *id, char **next) {
-    byte val;
+    char val;
 
     do {
         val = eval(next, WHOLEEXP) >> 8;
@@ -2138,7 +2168,7 @@ void dh(label *id, char **next) {
 
 void db(label *id, char **next) {
     int val, val2;
-    byte *s, *start;
+    unsigned char *s, *start;
     char c, quote;
 
     do {
@@ -2146,7 +2176,7 @@ void db(label *id, char **next) {
         quote = **next;
 
         if(quote == '"' || quote == '\'') {  // string
-            s = start = (byte*)(*next) + 1;
+            s = start = (char*)(*next) + 1;
 
             do {
                 c = *s;
@@ -2215,6 +2245,7 @@ void dsw(label *id, char **next) {
 }
 
 void filler(int count, char **next) {
+    // used by dsb(), align(), pad()
     int val = defaultfiller;
 
     if(dependant || (count < 0 && needanotherpass)) {  // unknown count! don't do anything
@@ -2247,7 +2278,18 @@ void align(label *id, char **next) {
 
     dependant = 0;
     count = eval(next, WHOLEEXP);
-    count = (count >= 0 && (unsigned int)addr % count) ? count - (unsigned int)addr % count : 0;
+
+    // merging if()s here will change the binary -qalle
+    if(count >= 0) {
+        if((unsigned int)addr % count) {
+            count -= (unsigned int)addr % count;
+        } else {
+            count = 0;
+        }
+    } else {
+        count = 0;
+    }
+
     filler(count, next);
 }
 
@@ -2274,9 +2316,9 @@ void org(label *id, char **next) {
 void opcode(label *id, char **next) {
     char *s, *s2;
     int type, val = 0, oldstate = needanotherpass, forceRel = 0;
-    byte *op;
+    unsigned char *op;
 
-    for(op = (byte*)(id->line); *op != 0xff; op += 2) {
+    for(op = (char*)(id->line); *op != 0xff; op += 2) {
         // loop through all addressing modes for this instruction
 
         needanotherpass = oldstate;
@@ -2286,11 +2328,13 @@ void opcode(label *id, char **next) {
         type = op[1];
         s = tmpstr;
 
-        if(type != IMP && type != ACC) {  // get operand
+        if(type != IMP && type != ACC) {
+            // get operand
             if(!eatchar(&s, ophead[type])) {
                 continue;
             }
             val = eval(&s, WHOLEEXP);
+
             if(type == REL) {
                 if(!dependant) {
                     val -= addr + 2;
@@ -2315,10 +2359,11 @@ void opcode(label *id, char **next) {
                     errmsg = OutOfRange;
                 }
             }
+
             if(errmsg && !dependant && !forceRel) {
                 continue;
             }
-        }
+        }  // if
 
         my_strupr(s);
         s2 = optail[type];
@@ -2341,7 +2386,7 @@ void opcode(label *id, char **next) {
         output_le(val, opsize[type]);
         *next += s - tmpstr;
         return;
-    }
+    }  // for
 
     if(!errmsg) {
         errmsg = Illegal;
@@ -2356,9 +2401,12 @@ void _if(label *id, char **next) {
     } else {
         iflevel++;
     }
+
     dependant = 0;
     val = eval(next, WHOLEEXP);
-    if(dependant || errmsg) {  // don't process yet
+
+    if(dependant || errmsg) {
+        // don't process yet
         ifdone[iflevel] = 1;
         skipline[iflevel] = 1;
     } else {
@@ -2375,6 +2423,7 @@ void ifdef(label *id, char **next) {
     } else {
         iflevel++;
     }
+
     getlabel(s, next);
     skipline[iflevel] = !(ptrdiff_t)findlabel(s) || skipline[iflevel - 1];
     ifdone[iflevel] = !skipline[iflevel];
@@ -2388,6 +2437,7 @@ void ifndef(label *id, char **next) {
     } else {
         iflevel++;
     }
+
     getlabel(s, next);
     skipline[iflevel] = (ptrdiff_t)findlabel(s) || skipline[iflevel - 1];
     ifdone[iflevel] = !skipline[iflevel];
@@ -2399,8 +2449,11 @@ void elseif(label *id, char **next) {
     if(iflevel) {
         dependant = 0;
         val = eval(next, WHOLEEXP);
-        if(!ifdone[iflevel]) {  // no previous true statements
-            if(dependant || errmsg) {  // don't process yet
+
+        if(!ifdone[iflevel]) {
+            // no previous true statements
+            if(dependant || errmsg) {
+                // don't process yet
                 ifdone[iflevel] = 1;
                 skipline[iflevel] = 1;
             } else {
@@ -2453,10 +2506,13 @@ void macro(label *id, char **next) {
     }
 
     makemacro = true_ptr;  // flag for processline to skip to ENDM
+
     if(errmsg) {
         // no valid macro name
         return;
-    } else if(labelhere->type == LABEL) {
+    }
+
+    if(labelhere->type == LABEL) {
         // new macro
         labelhere->type = MACRO;
         labelhere->line = 0;
@@ -2485,12 +2541,12 @@ void macro(label *id, char **next) {
 }
 
 void expandmacro(label *id, char **next, int errline, char *errsrc) {
-    /* errline = source file line number
-    errsrc = source file name */
+    // used by processline()
+    // errline = source file line number, errsrc = source file name
 
     // char argname[8];
-    // macroerr: this should be enough, i hope..
-    char macroerr[WORDMAX * 2], **line, c, c2, *s, *s2, *s3;
+    char macroerr[WORDMAX * 2];  // this should be enough, i hope..
+    char **line, c, c2, *s, *s2, *s3;
     int linecount = 0, oldscope, arg, args;
 
     if(id->used) {
@@ -2498,7 +2554,8 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
         return;
     }
 
-    oldscope = scope;  // watch those nested macros..
+    // watch those nested macros..
+    oldscope = scope;
     scope = nextscope++;
     insidemacro++;
     id->used = 1;
@@ -2536,8 +2593,10 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
             }
             c = *s3;
         }
+
         s2 = s3;
         *s2 = 0;
+
         if(*s) {
             // arg not empty
             // sprintf(argname, "\\%i", arg);  // make indexed arg
@@ -2551,6 +2610,7 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
             }
             arg++;
         }
+
         *s2 = c;
         s = s2;
     } while(eatchar(&s, ','));
@@ -2576,9 +2636,8 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
     id->used = 0;
 }
 
-// used by rept(), expandrept()
-int rept_loops;
-char *repttext;     // rept chain begins here
+int rept_loops;  // used by rept(), expandrept()
+char *repttext;  // used by rept(), expandrept(); rept chain begins here
 
 void rept(label *id, char **next) {
     dependant = 0;
@@ -2592,13 +2651,15 @@ void rept(label *id, char **next) {
 }
 
 void expandrept(int errline, char *errsrc) {
-    // macroerr: source to show in listing (this should be enough, i hope?)
-    char macroerr[WORDMAX * 2], **start, **line;
+    // used by processline()
+    char macroerr[WORDMAX * 2];  // source to show in listing (this should be enough, i hope?)
+    char **start, **line;
     int linecount, i, oldscope;
 
     start = (char**)repttext;  // first rept data
     oldscope = scope;
     insidemacro++;
+
     for(i = rept_loops; i; --i) {
         linecount = 0;
         scope = nextscope++;
@@ -2610,12 +2671,14 @@ void expandrept(int errline, char *errsrc) {
             line = (char**)(*line);
         }
     }
+
     while(start) {
         // delete everything
         line = (char**)(*start);
         free(start);
         start = line;
     }
+
     errmsg = 0;
     scope = oldscope;
     insidemacro--;
@@ -2647,11 +2710,14 @@ void ende(label *id, char **next) {
 }
 
 void fillval(label *id, char **next) {
+    // "fillvalue"
+
     dependant = 0;
     defaultfiller = eval(next, WHOLEEXP);
 }
 
 void make_error(label *id, char **next) {
+    // "error"
     char *s = *next;
 
     // eat whitesp, quotes off both ends

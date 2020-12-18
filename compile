@@ -1,32 +1,5 @@
-# Warning: this script DELETES files. Run at your own risk.
-
-clear
-
-echo "=== Comparing source of asm6 with asm6-qalle (ignoring all whitespace) ==="
-echo
-diff --ignore-all-space asm6.c asm6-qalle.c
-echo
-
-echo "=== Comparing compiled asm6 with asm6-qalle ==="
-# compile both with same filename or binaries will differ
-# optimize for size, suppress warning about unused return value
-#
-cp asm6.c temp.c
-gcc -Os -Wno-unused-result -o temp-orig temp.c
-rm temp.c
-#
-cp asm6-qalle.c temp.c
-gcc -Os -Wno-unused-result -o temp-qalle temp.c
-rm temp.c
-#
-diff temp-orig temp-qalle
-rm temp-orig temp-qalle
-echo
-
-echo "=== Compiling and compressing asm6 ==="
 # optimize for size, suppress warning about unused return value
 gcc -Os -Wno-unused-result -o asm6 asm6.c
 gzip --best asm6
 mv asm6.gz bin/
-echo
 
