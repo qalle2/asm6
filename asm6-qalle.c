@@ -1,17 +1,17 @@
 /* qalle's "fork".
-The compiled binary is identical to the original (gcc, default settings).
+The binary is identical to the original (gcc -Os, Linux/arm64).
 Changes:
     - whitespace
-    - move and add comments
     - parentheses
-    - curly braces: e.g. "if(a) b;" to "if(a) { b; }"
+    - curly braces
+    - move and add comments
     - "->": e.g. "(*a).b" to "a->b"
-    - replace e.g. "*(a+1)" with "a[1]"
+    - "[]": e.g. "*(a+1)" with "a[1]"
     - merge variable definitions: e.g. "int a; int b;" -> "int a, b;"
     - merge nested if blocks: e.g. "if(a) { if(b) { c; }}" -> "if(a && b) { c; }"
     - move "#define LISTMAX" and "#define eatwhitespace" to other defines
     - move variable definitions and enums
-    - maximum line length: 99 characters + newline
+    - maximum line length: 100 characters + newline
     - convert if...else blocks into ternary expressions
 */
 
@@ -51,10 +51,8 @@ Changes:
 #include <stdarg.h>
 
 #define VERSION       "1.6"
-
 #define addr          firstlabel.value  // '$' value
-#define NOORIGIN      -0x40000000       // nice even number so aligning works before origin is
-                                        //     defined
+#define NOORIGIN      -0x40000000     // nice even number so aligning works before origin is defined
 #define INITLISTSIZE  128               // initial label list size
 #define BUFFSIZE      8192              // file buffer (inputbuff, outputbuff) size
 #define WORDMAX       128               // used with getword()
@@ -67,16 +65,26 @@ Changes:
 
 #define eatwhitespace(str) (*str += strspn(*str, whitesp))
 
-// --- label struct -------------------------------------------------------------------------------
+static void *true_ptr = &true_ptr;
 
+enum labeltypes {
+    LABEL,    // known address
+    VALUE,    // defined with '='
+    EQUATE,   // made with EQU
+    MACRO,    // macro (duh)
+    RESERVED  // reserved word
+};
+
+/* notes:
+- ptrdiff_t can hold function pointer on 64-bit machines
+- char *line:
+    *next:text -> *next:text -> ..
+    for macros, the first <value> lines hold param names
+    for opcodes (reserved), this holds opcode definitions, see initlabels */
 typedef struct {
     const char *name;  // label name
-    // ptrdiff_t so it can hold function pointer on 64-bit machines
     ptrdiff_t value;   // PC (label), value (equate), param count (macro), funcptr (reserved)
     char *line;        // for macro or equate, also used to mark unknown label
-                       // *next:text -> *next:text -> ..
-                       // for macros, the first <value> lines hold param names
-                       // for opcodes (reserved), this holds opcode definitions, see initlabels
     int type;          // labeltypes enum (see above)
     int used;          // for EQU and MACRO recursion check
     int pass;          // when label was last defined
@@ -84,7 +92,19 @@ typedef struct {
     void *link;        // labels that share the same name (local labels) are chained together
 } label;
 
-// --- Function declarations (in the order they're defined) ---------------------------------------
+label firstlabel = {   // '$' label
+    "$",               // *name
+    0,                 // value
+    (char*)&true_ptr,  // *line
+    VALUE,             // type
+    0,                 // used
+    0,                 // pass
+    0,                 // scope
+    0,                 // link
+};
+
+typedef unsigned char byte;
+typedef void (*icfn)(label*, char**);
 
 int   getvalue    (char**);
 int   getoperator (char**);
@@ -99,7 +119,6 @@ label *newlabel ();
 
 void processline(char*, char*, int);
 void listline   (char*, char*);
-void endlist    ();                   // there's no such function -qalle
 
 // referred to in directives[] unless otherwise noted
 void equ         (label*, char**);
@@ -136,213 +155,396 @@ void ende        (label*, char**);
 void fillval     (label*, char**);  // "fillvalue"
 void make_error  (label*, char**);  // "error"
 
-// --- Misc globals -------------------------------------------------------------------------------
-
-static void *true_ptr = &true_ptr;
-
-enum labeltypes {
-    LABEL,    // known address
-    VALUE,    // defined with '='
-    EQUATE,   // made with EQU
-    MACRO,    // macro (duh)
-    RESERVED  // reserved word
-};
-
-label firstlabel = {   // '$' label
-    "$",               // *name
-    0,                 // value
-    (char*)&true_ptr,  // *line
-    VALUE,             // type
-    0,                 // used
-    0,                 // pass
-    0,                 // scope
-    0,                 // link
-};
-
-typedef void (*icfn)(label*, char**);
-
 // addressing modes
 enum optypes {
-    ACC, IMM, IND, INDX, INDY, ZPX, ZPY, ABSX, ABSY, ZP, ABS, REL, IMP
+    ACC,   // accumulator
+    IMM,   // immediate
+    IND,   // (indirect)
+    INDX,  // (indirect,x)
+    INDY,  // (indirect),y
+    ZPX,   // zeroPage,x
+    ZPY,   // zeroPage,y
+    ABSX,  // absolute,x
+    ABSY,  // absolute,y
+    ZP,    // zeroPage
+    ABS,   // absolute
+    REL,   // program counter relative
+    IMP    // implied
 };
+// size of stored operand
 int opsize[] = {
-    0, 1, 2, 1, 1, 1, 1, 2, 2, 1, 2, 1, 0
+    0,  // ACC
+    1,  // IMM
+    2,  // IND
+    1,  // INDX
+    1,  // INDY
+    1,  // ZPX
+    1,  // ZPY
+    2,  // ABSX
+    2,  // ABSY
+    1,  // ZP
+    2,  // ABS
+    1,  // REL
+    0   // IMP
 };
+// leading part of operand (0 = none)
 char ophead[] = {
-    0, '#', '(', '(', '(', 0, 0, 0, 0, 0, 0, 0, 0
+    0,    // ACC
+    '#',  // IMM
+    '(',  // IND
+    '(',  // INDX
+    '(',  // INDY
+    0,    // ZPX
+    0,    // ZPY
+    0,    // ABSX
+    0,    // ABSY
+    0,    // ZP
+    0,    // ABS
+    0,    // REL
+    0     // IMP
 };
+// trailing part of operand
 char *optail[] = {
-    "A", "", ")", ",X)", "),Y", ",X", ",Y", ",X", ",Y", "", "", "", ""
+    "A",    // ACC
+    "",     // IMM
+    ")",    // IND
+    ",X)",  // INDX
+    "),Y",  // INDY
+    ",X",   // ZPX
+    ",Y",   // ZPY
+    ",X",   // ABSX
+    ",Y",   // ABSY
+    "",     // ZP
+    "",     // ABS
+    "",     // REL
+    ""      // IMP
 };
 
 // opcodes and addressing modes for instructions
-char brk[] = {
-    0x00, IMM, 0x00, ZP, 0x00, IMP, -1
+byte brk[] = {
+    0x00, IMM,
+    0x00, ZP,
+    0x00, IMP,
+    -1
 };
-char ora[] = {
-    0x09, IMM, 0x01, INDX, 0x11, INDY, 0x15, ZPX, 0x1d, ABSX, 0x19, ABSY, 0x05, ZP, 0x0d, ABS, -1
+byte ora[] = {
+    0x09, IMM,
+    0x01, INDX,
+    0x11, INDY,
+    0x15, ZPX,
+    0x1d, ABSX,
+    0x19, ABSY,
+    0x05, ZP,
+    0x0d, ABS,
+    -1
 };
-char asl[] = {
-    0x0a, ACC, 0x16, ZPX, 0x1e, ABSX, 0x06, ZP, 0x0e, ABS, 0x0a, IMP, -1
+byte asl[] = {
+    0x0a, ACC,
+    0x16, ZPX,
+    0x1e, ABSX,
+    0x06, ZP,
+    0x0e, ABS,
+    0x0a, IMP,
+    -1
 };
-char php[] = {
-    0x08, IMP, -1
+byte php[] = {
+    0x08, IMP,
+    -1
 };
-char bpl[] = {
-    0x10, REL, -1
+byte bpl[] = {
+    0x10, REL,
+    -1
 };
-char clc[] = {
-    0x18, IMP, -1
+byte clc[] = {
+    0x18, IMP,
+    -1
 };
-char jsr[] = {
-    0x20, ABS, -1
+byte jsr[] = {
+    0x20, ABS,
+    -1
 };
-char and[] = {
-    0x29, IMM, 0x21, INDX, 0x31, INDY, 0x35, ZPX, 0x3d, ABSX, 0x39, ABSY, 0x25, ZP, 0x2d, ABS, -1
+byte and[] = {
+    0x29, IMM,
+    0x21, INDX,
+    0x31, INDY,
+    0x35, ZPX,
+    0x3d, ABSX,
+    0x39, ABSY,
+    0x25, ZP,
+    0x2d, ABS,
+    -1
 };
-char bit[] = {
-    0x24, ZP, 0x2c, ABS, -1
+byte bit[] = {
+    0x24, ZP,
+    0x2c, ABS,
+    -1
 };
-char rol[] = {
-    0x2a, ACC, 0x36, ZPX, 0x3e, ABSX, 0x26, ZP, 0x2e, ABS, 0x2a, IMP, -1
+byte rol[] = {
+    0x2a, ACC,
+    0x36, ZPX,
+    0x3e, ABSX,
+    0x26, ZP,
+    0x2e, ABS,
+    0x2a, IMP,
+    -1
 };
-char plp[] = {
-    0x28, IMP, -1
+byte plp[] = {
+    0x28, IMP,
+    -1
 };
-char bmi[] = {
-    0x30, REL, -1
+byte bmi[] = {
+    0x30, REL,
+    -1
 };
-char sec[] = {
-    0x38, IMP, -1
+byte sec[] = {
+    0x38, IMP,
+    -1
 };
-char rti[] = {
-    0x40, IMP, -1
+byte rti[] = {
+    0x40, IMP,
+    -1
 };
-char eor[] = {
-    0x49, IMM, 0x41, INDX, 0x51, INDY, 0x55, ZPX, 0x5d, ABSX, 0x59, ABSY, 0x45, ZP, 0x4d, ABS, -1
+byte eor[] = {
+    0x49, IMM,
+    0x41, INDX,
+    0x51, INDY,
+    0x55, ZPX,
+    0x5d, ABSX,
+    0x59, ABSY,
+    0x45, ZP,
+    0x4d, ABS,
+    -1
 };
-char lsr[] = {
-    0x4a, ACC, 0x56, ZPX, 0x5e, ABSX, 0x46, ZP, 0x4e, ABS, 0x4a, IMP, -1
+byte lsr[] = {
+    0x4a, ACC,
+    0x56, ZPX,
+    0x5e, ABSX,
+    0x46, ZP,
+    0x4e, ABS,
+    0x4a, IMP,
+    -1
 };
-char pha[] = {
-    0x48, IMP, -1
+byte pha[] = {
+    0x48, IMP,
+    -1
 };
-char jmp[] = {
-    0x6c, IND, 0x4c, ABS, -1
+byte jmp[] = {
+    0x6c, IND,
+    0x4c, ABS,
+    -1
 };
-char bvc[] = {
-    0x50, REL, -1
+byte bvc[] = {
+    0x50, REL,
+    -1
 };
-char cli[] = {
-    0x58, IMP, -1
+byte cli[] = {
+    0x58, IMP,
+    -1
 };
-char rts[] = {
-    0x60, IMP, -1
+byte rts[] = {
+    0x60, IMP,
+    -1
 };
-char adc[] = {
-    0x69, IMM, 0x61, INDX, 0x71, INDY, 0x75, ZPX, 0x7d, ABSX, 0x79, ABSY, 0x65, ZP, 0x6d, ABS, -1
+byte adc[] = {
+    0x69, IMM,
+    0x61, INDX,
+    0x71, INDY,
+    0x75, ZPX,
+    0x7d, ABSX,
+    0x79, ABSY,
+    0x65, ZP,
+    0x6d, ABS,
+    -1
 };
-char ror[] = {
-    0x6a, ACC, 0x76, ZPX, 0x7e, ABSX, 0x66, ZP, 0x6e, ABS, 0x6a, IMP, -1
+byte ror[] = {
+    0x6a, ACC,
+    0x76, ZPX,
+    0x7e, ABSX,
+    0x66, ZP,
+    0x6e, ABS,
+    0x6a, IMP,
+    -1
 };
-char pla[] = {
-    0x68, IMP, -1
+byte pla[] = {
+    0x68, IMP,
+    -1
 };
-char bvs[] = {
-    0x70, REL, -1
+byte bvs[] = {
+    0x70, REL,
+    -1
 };
-char sei[] = {
-    0x78, IMP, -1
+byte sei[] = {
+    0x78, IMP,
+    -1
 };
-char sta[] = {
-    0x81, INDX, 0x91, INDY, 0x95, ZPX, 0x9d, ABSX, 0x99, ABSY, 0x85, ZP, 0x8d, ABS, -1
+byte sta[] = {
+    0x81, INDX,
+    0x91, INDY,
+    0x95, ZPX,
+    0x9d, ABSX,
+    0x99, ABSY,
+    0x85, ZP,
+    0x8d, ABS,
+    -1
 };
-char sty[] = {
-    0x94, ZPX, 0x84, ZP, 0x8c, ABS, -1
+byte sty[] = {
+    0x94, ZPX,
+    0x84, ZP,
+    0x8c, ABS,
+    -1
 };
-char stx[] = {
-    0x96, ZPY, 0x86, ZP, 0x8e, ABS, -1
+byte stx[] = {
+    0x96, ZPY,
+    0x86, ZP,
+    0x8e, ABS,
+    -1
 };
-char dey[] = {
-    0x88, IMP, -1
+byte dey[] = {
+    0x88, IMP,
+    -1
 };
-char txa[] = {
-    0x8a, IMP, -1
+byte txa[] = {
+    0x8a, IMP,
+    -1
 };
-char bcc[] = {
-    0x90, REL, -1
+byte bcc[] = {
+    0x90, REL,
+    -1
 };
-char tya[] = {
-    0x98, IMP, -1
+byte tya[] = {
+    0x98, IMP,
+    -1
 };
-char txs[] = {
-    0x9a, IMP, -1
+byte txs[] = {
+    0x9a, IMP,
+    -1
 };
-char ldy[] = {
-    0xa0, IMM, 0xb4, ZPX, 0xbc, ABSX, 0xa4, ZP, 0xac, ABS, -1
+byte ldy[] = {
+    0xa0, IMM,
+    0xb4, ZPX,
+    0xbc, ABSX,
+    0xa4, ZP,
+    0xac, ABS,
+    -1
 };
-char lda[] = {
-    0xa9, IMM, 0xa1, INDX, 0xb1, INDY, 0xb5, ZPX, 0xbd, ABSX, 0xb9, ABSY, 0xa5, ZP, 0xad, ABS, -1
+byte lda[] = {
+    0xa9, IMM,
+    0xa1, INDX,
+    0xb1, INDY,
+    0xb5, ZPX,
+    0xbd, ABSX,
+    0xb9, ABSY,
+    0xa5, ZP,
+    0xad, ABS,
+    -1
 };
-char ldx[] = {
-    0xa2, IMM, 0xb6, ZPY, 0xbe, ABSY, 0xa6, ZP, 0xae, ABS, -1
+byte ldx[] = {
+    0xa2, IMM,
+    0xb6, ZPY,
+    0xbe, ABSY,
+    0xa6, ZP,
+    0xae, ABS,
+    -1
 };
-char tay[] = {
-    0xa8, IMP, -1
+byte tay[] = {
+    0xa8, IMP,
+    -1
 };
-char tax[] = {
-    0xaa, IMP, -1
+byte tax[] = {
+    0xaa, IMP,
+    -1
 };
-char bcs[] = {
-    0xb0, REL, -1
+byte bcs[] = {
+    0xb0, REL,
+    -1
 };
-char clv[] = {
-    0xb8, IMP, -1
+byte clv[] = {
+    0xb8, IMP,
+    -1
 };
-char tsx[] = {
-    0xba, IMP, -1
+byte tsx[] = {
+    0xba, IMP,
+    -1
 };
-char cpy[] = {
-    0xc0, IMM, 0xc4, ZP, 0xcc, ABS, -1
+byte cpy[] = {
+    0xc0, IMM,
+    0xc4, ZP,
+    0xcc, ABS,
+    -1
 };
-char cmp[] = {
-    0xc9, IMM, 0xc1, INDX, 0xd1, INDY, 0xd5, ZPX, 0xdd, ABSX, 0xd9, ABSY, 0xc5, ZP, 0xcd, ABS, -1
+byte cmp[] = {
+    0xc9, IMM,
+    0xc1, INDX,
+    0xd1, INDY,
+    0xd5, ZPX,
+    0xdd, ABSX,
+    0xd9, ABSY,
+    0xc5, ZP,
+    0xcd, ABS,
+    -1
 };
-char dec[] = {
-    0xd6, ZPX, 0xde, ABSX, 0xc6, ZP, 0xce, ABS, -1
+byte dec[] = {
+    0xd6, ZPX,
+    0xde, ABSX,
+    0xc6, ZP,
+    0xce, ABS,
+    -1
 };
-char iny[] = {
-    0xc8, IMP, -1
+byte iny[] = {
+    0xc8, IMP,
+    -1
 };
-char dex[] = {
-    0xca, IMP, -1
+byte dex[] = {
+    0xca, IMP,
+    -1
 };
-char bne[] = {
-    0xd0, REL, -1
+byte bne[] = {
+    0xd0, REL,
+    -1
 };
-char cld[] = {
-    0xd8, IMP, -1
+byte cld[] = {
+    0xd8, IMP,
+    -1
 };
-char cpx[] = {
-    0xe0, IMM, 0xe4, ZP, 0xec, ABS, -1
+byte cpx[] = {
+    0xe0, IMM,
+    0xe4, ZP,
+    0xec, ABS,
+    -1
 };
-char sbc[] = {
-    0xe9, IMM, 0xe1, INDX, 0xf1, INDY, 0xf5, ZPX, 0xfd, ABSX, 0xf9, ABSY, 0xe5, ZP, 0xed, ABS, -1
+byte sbc[] = {
+    0xe9, IMM,
+    0xe1, INDX,
+    0xf1, INDY,
+    0xf5, ZPX,
+    0xfd, ABSX,
+    0xf9, ABSY,
+    0xe5, ZP,
+    0xed, ABS,
+    -1
 };
-char inc[] = {
-    0xf6, ZPX, 0xfe, ABSX, 0xe6, ZP, 0xee, ABS, -1
+byte inc[] = {
+    0xf6, ZPX,
+    0xfe, ABSX,
+    0xe6, ZP,
+    0xee, ABS,
+    -1
 };
-char inx[] = {
-    0xe8, IMP, -1
+byte inx[] = {
+    0xe8, IMP,
+    -1
 };
-char nop[] = {
-    0xea, IMP, -1
+byte nop[] = {
+    0xea, IMP,
+    -1
 };
-char beq[] = {
-    0xf0, REL, -1
+byte beq[] = {
+    0xf0, REL,
+    -1
 };
-char sed[] = {
-    0xf8, IMP, -1
+byte sed[] = {
+    0xf8, IMP,
+    -1
 };
 
 // mnemonics for instructions
@@ -479,79 +681,55 @@ char NoENDE[]         = "Missing ENDE.";
 char IfNestLimit[]    = "Too many nested IFs.";
 char undefinedPC[]    = "PC is undefined (use ORG first)";
 
-char whitesp[]  = " \t\r\n:";         // for labels (read only)
-char whitesp2[] = " \t\r\n\"";        // for filenames (read only)
+char whitesp[]  = " \t\r\n:";   // for labels (read only)
+char whitesp2[] = " \t\r\n\"";  // for filenames (read only)
+char tmpstr[LINEMAX];           // all purpose big string
 
-char          tmpstr[LINEMAX];      // all purpose big string
-int           pass            = 0;
-int           scope;                // current scope, 0 = global
-int           nextscope;            // next nonglobal scope (increment on each new block of
-                                    // localized code)
-int           lastchance      = 0;  // set on final attempt
-int           needanotherpass;      // still need to take care of some things..
-int           error           = 0;  // hard error (stop assembly after this pass)
-char          **makemacro     = 0;  // (during macro creation) where next macro line will go.
-                                    //     1 to skip past macro
-char          **makerept;           // like makemacro.. points to end of string chain
-int           reptcount       = 0;  // counts rept statements during rept string storage
-int           iflevel         = 0;  // index into ifdone[], skipline[]
-int           ifdone[IFNESTS];      // nonzero if current IF level has been true
-int           skipline[IFNESTS];    // 1 on an IF statement that is false
-const char    *errmsg;
-char          *inputfilename  = 0;
-char          *outputfilename = 0;
-char          *listfilename   = 0;
-int           verboselisting  = 0;  // expand REPT loops in listing
-const char    *listerr        = 0;  // error message for list file
-label         *labelhere;           // points to the label being defined on the current line
-                                    //     (for EQU, =, etc)
-FILE          *listfile       = 0;
-FILE          *outputfile     = 0;
-unsigned char outputbuff[BUFFSIZE];
-char          inputbuff[BUFFSIZE];
-int           outcount;             // bytes waiting in outputbuff
-label         **labellist;          // array of label pointers (list starts from center and
-                                    // grows outward)
-int           labels;               // # of labels in labellist
-int           maxlabels;            // max # of labels labellist can hold
-int           labelstart;           // index of first label
-int           labelend;             // index of last label
-label         *lastlabel;           // last label created
-int           nooutput        = 0;  // supress output (use with ENUM)
-int           defaultfiller;        // default fill value
-int           insidemacro     = 0;  // macro/rept is being expanded
-int           verbose         = 1;
-
-char mathy[] = "!^&|+-*/%()<>=,";  // mathy stuff; read only; used by getword()
-
-// precedence levels
-enum prectypes {
-    WHOLEEXP, ORORP, ANDANDP, ORP, XORP, ANDP, EQCOMPARE, COMPARE, SHIFT, PLUSMINUS, MULDIV, UNARY
-};
-// all operators
-enum operators {
-    NOOP, EQUAL, NOTEQUAL, GREATER, GREATEREQ, LESS, LESSEQ,
-    PLUS, MINUS, MUL, DIV, MOD, AND, XOR,
-    OR, ANDAND, OROR, LEFTSHIFT, RIGHTSHIFT
-};
-// precedence of each operator
-char prec[] = {
-    WHOLEEXP, EQCOMPARE, EQCOMPARE, COMPARE, COMPARE, COMPARE, COMPARE,
-    PLUSMINUS, PLUSMINUS, MULDIV, MULDIV, MULDIV, ANDP, XORP,
-    ORP, ANDANDP, ORORP, SHIFT, SHIFT
-};
-
-typedef unsigned char byte;  // not used anywhere -qalle
+int   pass = 0;
+int   scope;               // current scope, 0 = global
+int   nextscope;           // next nonglobal scope (increment on each new block of localized code)
+int   lastchance = 0;      // set on final attempt
+int   needanotherpass;     // still need to take care of some things..
+int   error = 0;           // hard error (stop assembly after this pass)
+char  **makemacro = 0;     // where next macro line will go during macro creation. 1=skip past macro
+char  **makerept;          // like makemacro.. points to end of string chain
+int   reptcount = 0;       // counts rept statements during rept string storage
+int   iflevel = 0;         // index into ifdone[], skipline[]
+int   ifdone[IFNESTS];     // nonzero if current IF level has been true
+int   skipline[IFNESTS];   // 1 on an IF statement that is false
+const char *errmsg;
+char  *inputfilename = 0;
+char  *outputfilename = 0;
+char  *listfilename = 0;
+int   verboselisting = 0;  // expand REPT loops in listing
+const char *listerr = 0;   // error message for list file
+label *labelhere;          // points to the label being defined on current line (for EQU, =, etc)
+FILE  *listfile = 0;
+FILE  *outputfile = 0;
+byte  outputbuff[BUFFSIZE];
+byte  inputbuff[BUFFSIZE];
+int   outcount;            // bytes waiting in outputbuff
+label **labellist;         // array of label pointers (list starts from center and grows outward)
+int   labels;              // # of labels in labellist
+int   maxlabels;           // max # of labels labellist can hold
+int   labelstart;          // index of first label
+int   labelend;            // index of last label
+label *lastlabel;          // last label created
+int   nooutput = 0;        // supress output (use with ENUM)
+int   defaultfiller;       // default fill value
+int   insidemacro = 0;     // macro/rept is being expanded
+int   verbose = 1;
 
 // ------------------------------------------------------------------------------------------------
 
 static void *ptr_from_bool(int b) {
-    return b ? true_ptr : NULL;
+    // called by: addlabel(), equal()
+    return (b ? true_ptr : NULL);
 }
 
 static void fatal_error(const char fmt[], ...) {
-    /* Prints printf-style message to stderr, then exits.
-    Closes and deletes output file. */
+    // Prints printf-style message to stderr, then exits. Closes and deletes output file.
+    // called by: my_malloc(), main()
     va_list args;
 
     if(outputfile != NULL) {
@@ -570,6 +748,7 @@ static void fatal_error(const char fmt[], ...) {
 
 static void message(const char fmt[], ...) {
     // Prints printf-style message if verbose mode is enabled.
+    // called by: main(), listline()
     if(verbose) {
         va_list args;
         va_start(args, fmt);
@@ -582,9 +761,7 @@ static char *my_malloc(size_t s) {
     // Same as malloc(), but prints error and exits if allocation fails
     char *p = malloc(s ? s : 1);
 
-    if(p == NULL) {
-        fatal_error("out of memory");
-    }
+    if(p == NULL) fatal_error("out of memory");
     return p;
 }
 
@@ -597,7 +774,7 @@ static char *my_strdup(const char *in) {
     return out;
 }
 
-// --- Parsing functions --------------------------------------------------------------------------
+// --- Parsing functions ---------------------------------------------------------------------------
 
 /* Not all systems support this, so we implement our own always. More problematic to try to use
 the system's version rather than ours in all cases. */
@@ -605,9 +782,7 @@ the system's version rather than ours in all cases. */
 char *my_strupr(char *string) {
     char *s;
 
-    if(string == NULL) {
-        return (char*)NULL;
-    }
+    if(string == NULL) return (char*)NULL;
 
     for(s = string; *s; ++s) {
         *s = toupper((unsigned char)*s);
@@ -617,20 +792,15 @@ char *my_strupr(char *string) {
 }
 
 int hexify(int i) {
-    if(i >= '0' && i <= '9') {
-        return i - '0';
-    } else if(i >= 'a' && i <= 'f') {
-        return i - ('a' - 10);
-    } else if(i >= 'A' && i <= 'F') {
-        return i - ('A' - 10);
-    } else {
-        errmsg = NotANumber;
-        return 0;
-    }
+    if     (i >= '0' && i <= '9') { return i - '0'; }
+    else if(i >= 'a' && i <= 'f') { return i - 'a' + 10; }
+    else if(i >= 'A' && i <= 'F') { return i - 'A' + 10; }
+    else                          { errmsg = NotANumber; return 0; }
 }
 
 char *strend(char *str, char *whitespace) {
     // find end of str, excluding any chars in whitespace
+    // called by: getfilename()
     char c, *w = whitespace, *end = str + strlen(str);
 
     while(*w && end != str) {
@@ -649,6 +819,7 @@ int dependant;  // used by getvalue() etc.; set to nonzero if symbol couldn't be
 
 int getvalue(char **str) {
     // decode str into a number; set errmsg on error
+    // called by: eval()
     char *s, *end;
     int ret, chars, j;
     label *p;
@@ -670,8 +841,7 @@ int getvalue(char **str) {
             ret = addr;  // $ by itself is the PC
         } else {
             do {
-hexi:
-                j = hexify(*s);
+hexi:           j = hexify(*s);
                 s++;
                 chars++;
                 ret = (ret << 4) | j;
@@ -684,78 +854,114 @@ hexi:
         // binary
         s++;
         do {
-bin:
-            j = *s;
+bin:        j = *s;
             s++;
             chars++;
             j -= '0';
-            if(j > 1) {
-                errmsg = NotANumber;
-            }
+            if(j > 1) errmsg = NotANumber;
             ret = (ret << 1) | j;
         } while(*s);
-        if(chars > 32) {
-            errmsg = OutOfRange;
-        }
+        if(chars > 32) errmsg = OutOfRange;
     } else if(*s == '\'') {
         // char
         s++;
-        if(*s == '\\') {
-            s++;
-        }
+        if(*s == '\\') s++;
         ret = *s;
         s++;
-        if(*s != '\'') {
-            errmsg = NotANumber;
-        }
+        if(*s != '\'') errmsg = NotANumber;
     } else if(*s == '"') {
         // char 2
         s++;
-        if(*s == '\\') {
-            s++;
-        }
+        if(*s == '\\') s++;
         ret = *s;
         s++;
-        if(*s != '"') {
-            errmsg = NotANumber;
-        }
+        if(*s != '"') errmsg = NotANumber;
     } else if(*s >= '0' && *s <= '9') {
         // number
         end = s + strlen(s) - 1;
-        if(strspn(s, "0123456789") == strlen(s)) {
-            ret = atoi(s);
-        } else if(*end == 'b' || *end == 'B') {
-            *end = 0;
-            goto bin;
-        } else if(*end == 'h' || *end == 'H') {
-            *end = 0;
-            goto hexi;
-        } else {
-            errmsg = NotANumber;
-        }
+        if(strspn(s, "0123456789") == strlen(s)) { ret = atoi(s); }
+        else if(*end == 'b' || *end == 'B')      { *end = 0; goto bin; }
+        else if(*end == 'h' || *end == 'H')      { *end = 0; goto hexi; }
+        else                                     { errmsg = NotANumber; }
     } else {
         // label
         p = findlabel(gvline);
         if(!p) {  // label doesn't exist (yet?)
             needanotherpass = dependant = 1;
             // only show error once we're certain label will never exist
-            if(lastchance) {
-                errmsg = UnknownLabel;
-            }
+            if(lastchance) errmsg = UnknownLabel;
         } else {
             dependant |= !p->line;
             needanotherpass |= !p->line;
-            if(p->type == LABEL || p->type == VALUE) {
-                ret = p->value;
-            } else if(p->type == MACRO) {
-                errmsg = "Can't use macro in expression.";
-            } else {  // what else is there?
-                errmsg = UnknownLabel;
-            }
+            if(p->type == LABEL || p->type == VALUE) ret = p->value;
+            else if(p->type == MACRO)                errmsg = "Can't use macro in expression.";
+            else                                     errmsg = UnknownLabel;  // what else is there?
         }
     }
     return ret;
 }
+
+// binary arithmetic operators; used by getword()
+char mathy[] = "!^&|+-*/%()<>=,";
+// precedence levels
+enum prectypes {
+    WHOLEEXP,
+    ORORP,
+    ANDANDP,
+    ORP,
+    XORP,
+    ANDP,
+    EQCOMPARE,
+    COMPARE,
+    SHIFT,
+    PLUSMINUS,
+    MULDIV,
+    UNARY
+};
+// binary operators
+enum operators {
+    NOOP,       // no operator
+    EQUAL,      // "=" or "=="
+    NOTEQUAL,   // "<>" or "!="
+    GREATER,    // ">"
+    GREATEREQ,  // ">="
+    LESS,       // "<"
+    LESSEQ,     // "<="
+    PLUS,       // "+"
+    MINUS,      // "-"
+    MUL,        // "*"
+    DIV,        // "/"
+    MOD,        // "%"
+    AND,        // "&"
+    XOR,        // "^"
+    OR,         // "|"
+    ANDAND,     // "&&"
+    OROR,       // "||"
+    LEFTSHIFT,  // "<<"
+    RIGHTSHIFT  // ">>"
+};
+// precedence of each binary operator
+char prec[] = {
+    WHOLEEXP,   // NOOP
+    EQCOMPARE,  // EQUAL
+    EQCOMPARE,  // NOTEQUAL
+    COMPARE,    // GREATER
+    COMPARE,    // GREATEREQ
+    COMPARE,    // LESS
+    COMPARE,    // LESSEQ
+    PLUSMINUS,  // PLUS
+    PLUSMINUS,  // MINUS
+    MULDIV,     // MUL
+    MULDIV,     // DIV
+    MULDIV,     // MOD
+    ANDP,       // AND
+    XORP,       // XOR
+    ORP,        // OR
+    ANDANDP,    // ANDAND
+    ORORP,      // OROR
+    SHIFT,      // LEFTSHIFT
+    SHIFT       // RIGHTSHIFT
+};
 
 int getoperator(char **str) {
     // get operator from str and advance str
@@ -764,69 +970,33 @@ int getoperator(char **str) {
 
     switch(*(*str - 1)) {
         case '&':
-            if(**str == '&') {
-                (*str)++;
-                return ANDAND;
-            } else {
-                return AND;
-            }
+            if(**str == '&') { (*str)++; return ANDAND; }
+            else             { return AND; }
         case '|':
-            if(**str == '|') {
-                (*str)++;
-                return OROR;
-            } else {
-                return OR;
-            }
-        case '^':
-            return XOR;
-        case '+':
-            return PLUS;
-        case '-':
-            return MINUS;
-        case '*':
-            return MUL;
-        case '%':
-            return MOD;
-        case '/':
-            return DIV;
-        case '=':
-            if(**str == '=') {
-                (*str)++;
-            }
-            return EQUAL;
+            if(**str == '|') { (*str)++; return OROR; }
+            else             { return OR; }
+        case '^': return XOR;
+        case '+': return PLUS;
+        case '-': return MINUS;
+        case '*': return MUL;
+        case '%': return MOD;
+        case '/': return DIV;
+        case '=': if(**str == '=') (*str)++; return EQUAL;
         case '>':
-            if(**str == '=') {
-                (*str)++;
-                return GREATEREQ;
-            } else if(**str == '>') {
-                (*str)++;
-                return RIGHTSHIFT;
-            } else {
-                return GREATER;
-            }
+            if     (**str == '=') { (*str)++; return GREATEREQ; }
+            else if(**str == '>') { (*str)++; return RIGHTSHIFT; }
+            else                  { return GREATER; }
         case '<':
-            if(**str == '=') {
-                (*str)++;
-                return LESSEQ;
-            } else if(**str == '>') {
-                (*str)++;
-                return NOTEQUAL;
-            } else if(**str == '<') {
-                (*str)++;
-                return LEFTSHIFT;
-            } else {
-                return LESS;
-            }
+            if     (**str == '=') { (*str)++; return LESSEQ; }
+            else if(**str == '>') { (*str)++; return NOTEQUAL; }
+            else if(**str == '<') { (*str)++; return LEFTSHIFT; }
+            else                  { return LESS; }
         case '!':
-            if(**str == '=') {
-                (*str)++;
-                return NOTEQUAL;
-            }
+            if(**str == '=') { (*str)++; return NOTEQUAL; }
             // (to default)
         default:
-            (*str)--;
-            return NOOP;
-    }  // switch
+            (*str)--; return NOOP;
+    }
 }
 
 int eval(char **str, int precedence) {
@@ -842,32 +1012,13 @@ int eval(char **str, int precedence) {
             s++;
             ret = eval(&s, WHOLEEXP);
             s += strspn(s, whitesp);  // eatwhitespace
-            if(*s == ')') {
-                s++;
-            } else {
-                errmsg = IncompleteExp;
-            }
+            if(*s == ')') s++; else errmsg = IncompleteExp;
             break;
-        case '#':
-            s++;
-            ret = eval(&s, WHOLEEXP);
-            break;
-        case '~':
-            s++;
-            ret = ~eval(&s, UNARY);
-            break;
-        case '!':
-            s++;
-            ret = !eval(&s, UNARY);
-            break;
-        case '<':
-            s++;
-            ret = eval(&s, UNARY) & 0xff;
-            break;
-        case '>':
-            s++;
-            ret = (eval(&s, UNARY) >> 8) & 0xff;
-            break;
+        case '#': s++; ret = eval(&s, WHOLEEXP); break;
+        case '~': s++; ret = ~eval(&s, UNARY); break;
+        case '!': s++; ret = !eval(&s, UNARY); break;
+        case '<': s++; ret = eval(&s, UNARY) & 0xff; break;
+        case '>': s++; ret = (eval(&s, UNARY) >> 8) & 0xff; break;
         case '+':
         case '-':
             // careful.. might be +-label
@@ -877,9 +1028,7 @@ int eval(char **str, int precedence) {
             val2 = needanotherpass;
             dependant = 0;
             ret = getvalue(&s2);
-            if(errmsg == UnknownLabel) {
-                errmsg = 0;
-            }
+            if(errmsg == UnknownLabel) errmsg = 0;
             if(!dependant || s2 == s) {  // found something or single + -
                 s = s2;
                 s2 = 0;  // flag that we got something
@@ -890,9 +1039,7 @@ int eval(char **str, int precedence) {
             }
             if(s2) {  // if it wasn't a +-label
                 ret = eval(&s, UNARY);
-                if(unary == '-') {
-                    ret = -ret;
-                }
+                if(unary == '-') ret = -ret;
             }
             break;
         default:
@@ -906,69 +1053,25 @@ int eval(char **str, int precedence) {
             val2 = eval(&s, prec[op]);
             if(!dependant) {
                 switch(op) {
-                    case AND:
-                        ret &= val2;
-                        break;
-                    case ANDAND:
-                        ret = ret && val2;
-                        break;
-                    case OR:
-                        ret |= val2;
-                        break;
-                    case OROR:
-                        ret = ret || val2;
-                        break;
-                    case XOR:
-                        ret ^= val2;
-                        break;
-                    case PLUS:
-                        ret += val2;
-                        break;
-                    case MINUS:
-                        ret -= val2;
-                        break;
-                    case MUL:
-                        ret *= val2;
-                        break;
-                    case DIV:
-                        if(!val2) {
-                            errmsg = DivZero;
-                        } else {
-                            ret /= val2;
-                        }
-                        break;
-                    case MOD:
-                        if(!val2) {
-                            errmsg = DivZero;
-                        } else {
-                            ret %= val2;
-                        }
-                        break;
-                    case EQUAL:
-                        ret = (ret == val2);
-                        break;
-                    case NOTEQUAL:
-                        ret = (ret != val2);
-                        break;
-                    case GREATER:
-                        ret = ret > val2;
-                        break;
-                    case GREATEREQ:
-                        ret = ret >= val2;
-                        break;
-                    case LESS:
-                        ret = ret < val2;
-                        break;
-                    case LESSEQ:
-                        ret = ret <= val2;
-                        break;
-                    case LEFTSHIFT:
-                        ret <<= val2;
-                        break;
-                    case RIGHTSHIFT:
-                        ret >>= val2;
-                        break;
-                }  // switch
+                    case AND:        ret &= val2; break;
+                    case ANDAND:     ret = ret && val2; break;
+                    case OR:         ret |= val2; break;
+                    case OROR:       ret = ret || val2; break;
+                    case XOR:        ret ^= val2; break;
+                    case PLUS:       ret += val2; break;
+                    case MINUS:      ret -= val2; break;
+                    case MUL:        ret *= val2; break;
+                    case DIV:        if(!val2) errmsg = DivZero; else ret /= val2; break;
+                    case MOD:        if(!val2) errmsg = DivZero; else ret %= val2; break;
+                    case EQUAL:      ret = (ret == val2); break;
+                    case NOTEQUAL:   ret = (ret != val2); break;
+                    case GREATER:    ret = ret > val2; break;
+                    case GREATEREQ:  ret = ret >= val2; break;
+                    case LESS:       ret = ret < val2; break;
+                    case LESSEQ:     ret = ret <= val2; break;
+                    case LEFTSHIFT:  ret <<= val2; break;
+                    case RIGHTSHIFT: ret >>= val2; break;
+                }
             } else {
                 ret = 0;
             }  // if...else
@@ -1034,30 +1137,22 @@ label *getreserved(char **src) {
         upp[1] = 0;
         (*src)++;
     } else {
-        if(**src == '.') {  // reserved words can start with "."
-            (*src)++;
-        }
+        if(**src == '.') (*src)++;  // reserved words can start with "."
         getword(dst, src, 1);
         strcpy(upp, dst);
         my_strupr(upp);
     }
 
     p = findlabel(upp);  // case insensitive reserved word
-    if(!p) {
-        p = findlabel(dst);  // or case sensitive macro
-    }
+    if(!p) p = findlabel(dst);  // or case sensitive macro
     if(p) {
         if(p->type == MACRO) {
-            if(p->pass != pass) {
-                p = 0;
-            }
+            if(p->pass != pass) p = 0;
         } else if(p->type != RESERVED) {
             p = 0;
         }
     }
-    if(!p) {
-        errmsg = Illegal;
-    }
+    if(!p) errmsg = Illegal;
     return p;
 }
 
@@ -1067,26 +1162,19 @@ int getlabel(char *dst, char **src) {
     char *s, c;
 
     getword(dst, src, 1);
-    if(*dst == '$' && !dst[1]) {  // '$' label
-        return 1;
-    }
+    if(*dst == '$' && !dst[1]) return 1;  // '$' label
 
     s = dst;  // +label, -label
     c = *s;
     if(c == '+' || c == '-') {
-        do {
-            s++;
-        } while(*s == c);
-        if(!*s) {  // just ++.. or --.., no text
-            return 1;
-        }
+        do s++; while(*s == c);
+        if(!*s) return 1;  // just ++.. or --.., no text
     }
     c = *s;
     if(c == LOCALCHAR || c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
-        // label can start with these
-        return 1;
+        return 1;  // label can start with these
     } else {
-        errmsg = Illegal;  // fucked up instruction
+        errmsg = Illegal;  // f*cked up instruction
         return 0;
     }
 }
@@ -1117,11 +1205,7 @@ char *expandline(char *dst, char *src) {
             src++;
             do {
                 *dst = c2 = *src;
-                if(c2 == '\\') {
-                    dst++;
-                    src++;
-                    *dst = *src;
-                }
+                if(c2 == '\\') *(++dst) = *(++src);
                 dst++;
                 src++;
             } while(c2 && c2 != c);
@@ -1133,10 +1217,7 @@ char *expandline(char *dst, char *src) {
             // symbol
             start = src;
             // scan to end of symbol
-            do {
-                src++;
-                c = *src;
-            } while(
+            do c = *(++src); while(
                 c == '_' || c == '.' || c == LOCALCHAR
                 || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
             );
@@ -1162,11 +1243,8 @@ char *expandline(char *dst, char *src) {
             if(!def_skip) {
                 strcpy(upp, start + (*start == '.'));
                 my_strupr(upp);
-                if(!strcmp(upp, "IFDEF") || !strcmp(upp, "IFNDEF")) {
-                    def_skip = 1;
-                } else {
-                    p = findlabel(start);
-                }
+                if(!strcmp(upp, "IFDEF") || !strcmp(upp, "IFNDEF")) def_skip = 1;
+                else                                                p = findlabel(start);
             }
 
             if(p) {
@@ -1219,9 +1297,7 @@ void reverse(char *dst, char *src) {
     // reverse string
     dst += strlen(src);
     *dst = 0;
-    while(*src) {
-        *(--dst) = *(src++);
-    }
+    while(*src) *(--dst) = *(src++);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1234,63 +1310,44 @@ void addlabel(char *word, int local) {
     char c = *word;
     label *p = findlabel(word);
 
-    // if it's global and we're local
-    if(p && local && !p->scope && p->type != VALUE) {
-        // pretend we didn't see it (local label overrides global of the same name)
-        p = 0;
-    }
+    // if it's global and we're local pretend we didn't see it
+    // (local label overrides global of the same name)
+    if(p && local && !p->scope && p->type != VALUE) p = 0;
+
     // global labels advance scope
-    if(c != LOCALCHAR && !local) {
-        scope = nextscope++;
-    }
+    if(c != LOCALCHAR && !local) scope = nextscope++;
 
     if(!p) {
         // new label
         labelhere = newlabel();
-        if(!labelhere->name) {  // name already set if it's a duplicate
-            labelhere->name = my_strdup(word);
-        }
+        // name already set if it's a duplicate
+        if(!labelhere->name) labelhere->name = my_strdup(word);
         // assume it's a label.. could mutate into something else later
         labelhere->type  = LABEL;
         labelhere->pass  = pass;
         labelhere->value = addr;
         labelhere->line  = ptr_from_bool(addr >= 0);
         labelhere->used  = 0;
-
-        // converting this into a ternary expression will change the binary -qalle
-        if(c == LOCALCHAR || local) {
-            // local
-            labelhere->scope = scope;
-        } else {
-            // global
-            labelhere->scope = 0;
-        }
+        labelhere->scope = (c == LOCALCHAR || local ? scope : 0);  // local/global
 
         lastlabel = labelhere;
     } else {
         // old label
         labelhere = p;
         if(p->pass == pass && c != '-') {  // if this label already encountered
-            if(p->type == VALUE) {
-                return;
-            } else {
-                errmsg = LabelDefined;
-            }
+            if(p->type == VALUE) return;
+            else                 errmsg = LabelDefined;
         } else {
             // first time seen on this pass or (-) label
             p->pass = pass;
             if(p->type == LABEL) {
                 if(p->value != addr && c != '-') {
                     needanotherpass = 1;  // label position is still moving around
-                    if(lastchance) {
-                        errmsg = BadAddr;
-                    }
+                    if(lastchance) errmsg = BadAddr;
                 }
                 p->value = addr;
                 p->line = ptr_from_bool(addr >= 0);
-                if(lastchance && addr < 0) {
-                    errmsg = BadAddr;
-                }
+                if(lastchance && addr < 0) errmsg = BadAddr;
             }
         }
     }
@@ -1311,30 +1368,32 @@ void initlabels(void) {
 
     // add reserved words to label list
 
-    do {  // opcodes first
+    do {
+        // opcodes first
         findlabel(rsvdlist[i]);  // must call findlabel before using newlabel
         p = newlabel();
-        p->name = rsvdlist[i];
+        p->name  = rsvdlist[i];
         p->value = (ptrdiff_t)opcode;
-        p->line = rsvdlist[i + 1];
-        p->type = RESERVED;
+        p->line  = rsvdlist[i + 1];
+        p->type  = RESERVED;
         i += 2;
     } while(rsvdlist[i]);
 
     i = 0;
-    do {  // other reserved words now
+    do {
+        // other reserved words now
         findlabel(directives[i].name);
         p = newlabel();
-        p->name = directives[i].name;
+        p->name  = directives[i].name;
         p->value = (ptrdiff_t)directives[i].func;
-        p->type = RESERVED;
+        p->type  = RESERVED;
         i++;
     } while(directives[i].name);
     lastlabel = p;
 }
 
-int findindex;  // used by findlabel(), growlist(), newlabel()
 int findcmp;    // used by findlabel(), newlabel()
+int findindex;  // used by findlabel(), growlist(), newlabel()
 
 label *findlabel(char *name) {
     /* find label with this name
@@ -1360,10 +1419,8 @@ label *findlabel(char *name) {
         }
     } while(findcmp && (tail - head) >= 0);
     if(findcmp) {
-        if(findcmp < 0) {
-            // position findindex so the label it points to needs to shift right
-            findindex++;
-        }
+        // position findindex so the label it points to needs to shift right
+        if(findcmp < 0) findindex++;
         return 0;
     }
     p = labellist[findindex];
@@ -1373,23 +1430,15 @@ label *findlabel(char *name) {
     if(*name == '+') {  // forward labels need special treatment :P
         do {
             if(p->pass != pass) {
-                if(!p->scope) {
-                    global = p;
-                }
-                if(p->scope == scope) {
-                    return p;
-                }
+                if(!p->scope) global = p;
+                if(p->scope == scope) return p;
             }
             p = p->link;
         } while(p);
     } else {
         do {
-            if(!p->scope) {
-                global = p;
-            }
-            if(p->scope == scope) {
-                return p;
-            }
+            if(!p->scope) global = p;
+            if(p->scope == scope) return p;
             p = p->link;
         } while(p);
     }
@@ -1418,9 +1467,9 @@ label *newlabel(void) {
     label **start, **end, *p;
 
     p = (label*)my_malloc(sizeof(label));
-    p->link = 0;
+    p->link  = 0;
     p->scope = 0;
-    p->name = 0;
+    p->name  = 0;
 
     if(!findcmp) {  // new label with same name
         p->name = labellist[findindex]->name;  // share old name
@@ -1432,10 +1481,7 @@ label *newlabel(void) {
         // }
         return p;
     }
-    if(!labelstart || labelend >= maxlabels - 1) {
-        // make sure there's room to add
-        growlist();
-    }
+    if(!labelstart || labelend >= maxlabels - 1) growlist();  // make sure there's room to add
 
     end = &labellist[findindex];
     if(findindex > (labelstart + labels / 2)) {
@@ -1466,10 +1512,7 @@ void showerror(char *errsrc, int errline) {
 
     error = 1;
     fprintf(stderr, "%s(%i): %s\n", errsrc, errline, errmsg);
-
-    if(!listerr) {  // only list the first error for this line
-        listerr = errmsg;
-    }
+    if(!listerr) listerr = errmsg;  // only list the first error for this line
 }
 
 char fileline[LINEMAX];  // used by processfile()
@@ -1485,9 +1528,7 @@ void processfile(FILE *f, char *name) {
     do {
         nline++;
         eof = !fgets(fileline, LINEMAX, f);
-        if(!eof) {
-            processline(fileline, name, nline);
-        }
+        if(!eof) processline(fileline, name, nline);
     } while(!eof);
 
     nest--;
@@ -1496,22 +1537,11 @@ void processfile(FILE *f, char *name) {
     if(!nest) {  // if main source file (not included)
         errmsg = 0;
 
-        if(iflevel) {
-            errmsg = NoENDIF;
-        }
-        if(reptcount) {
-            errmsg = NoENDR;
-        }
-        if(makemacro) {
-            errmsg = NoENDM;
-        }
-        if(nooutput) {
-            errmsg = NoENDE;
-        }
-
-        if(errmsg) {
-            showerror(name, nline);
-        }
+        if(iflevel)   errmsg = NoENDIF;
+        if(reptcount) errmsg = NoENDR;
+        if(makemacro) errmsg = NoENDM;
+        if(nooutput)  errmsg = NoENDE;
+        if(errmsg) showerror(name, nline);
     }
 }
 
@@ -1526,9 +1556,7 @@ void processline(char *src, char *errsrc, int errline) {
 
     errmsg = 0;
     comment = expandline(line, src);
-    if(!insidemacro || verboselisting) {
-        listline(line, comment);
-    }
+    if(!insidemacro || verboselisting) listline(line, comment);
 
     s = line;
 
@@ -1553,17 +1581,13 @@ void processline(char *src, char *errsrc, int errline) {
                     }
                 }
                 if(makemacro && makemacro != true_ptr) {
-                    if(comment) {
-                        strcat(line, comment);  // keep comment for listing
-                    }
+                    if(comment) strcat(line, comment);  // keep comment for listing
                     *makemacro = my_malloc(strlen(line) + sizeof(char*) + 1);
                     makemacro = (char**)*makemacro;
                     *makemacro = 0;
                     strcpy((char*)&makemacro[1], line);
                 }
-                if(p && p->value == (ptrdiff_t)endm) {
-                    makemacro = 0;
-                }
+                if(p && p->value == (ptrdiff_t)endm) makemacro = 0;
                 break;
             }  // makemacro
 
@@ -1590,19 +1614,13 @@ void processline(char *src, char *errsrc, int errline) {
                     }
                 }
                 if(reptcount || endmac) {  // add this line to REPT body
-                    if(comment) {
-                        // keep comment for listing
-                        strcat(line, comment);
-                    }
+                    if(comment) strcat(line, comment);  // keep comment for listing
                     *makerept = my_malloc(strlen(line) + sizeof(char*) + 1);
                     makerept = (char**)*makerept;
                     *makerept = 0;
                     strcpy((char*)&makerept[1], line);
                 }
-                if(!reptcount) {
-                    // end of REPT, expand the whole thing right now
-                    expandrept(errline, errsrc);
-                }
+                if(!reptcount) expandrept(errline, errsrc);  // end of REPT, expand all now
                 break;
             }
 
@@ -1616,9 +1634,7 @@ void processline(char *src, char *errsrc, int errline) {
                 if(!p) {
                     // it was a label... ignore it and move on
                     p = getreserved(&s);
-                    if(!p) {
-                        break;
-                    }
+                    if(!p) break;
                 }
                 if(
                     p->value    != (ptrdiff_t)_else
@@ -1627,37 +1643,24 @@ void processline(char *src, char *errsrc, int errline) {
                     && p->value != (ptrdiff_t)_if
                     && p->value != (ptrdiff_t)ifdef
                     && p->value != (ptrdiff_t)ifndef
-                ) {
-                    break;
-                }
+                ) break;
             }
 
             if(!p) {  // maybe a label?
-                if(getlabel(word, &s2)) {
-                    addlabel(word, insidemacro);
-                }
-                if(errmsg) {
-                    goto badlabel;  // fucked up label
-                }
+                if(getlabel(word, &s2)) addlabel(word, insidemacro);
+                if(errmsg) goto badlabel;  // fucked up label
                 p = getreserved(&s);
             }
             if(p) {
-                if(p->type == MACRO) {
-                    expandmacro(p, &s, errline, errsrc);
-                } else {
-                    ((icfn)p->value)(p, &s);
-                }
+                if(p->type == MACRO) expandmacro(p, &s, errline, errsrc);
+                else                 ((icfn)p->value)(p, &s);
             }
             if(!errmsg) {  // check extra garbage
                 s += strspn(s, whitesp);
-                if(*s) {
-                    errmsg = "Extra characters on line.";
-                }
+                if(*s) errmsg = "Extra characters on line.";
             }
 badlabel:
-            if(errmsg) {
-                showerror(errsrc, errline);
-            }
+            if(errmsg) showerror(errsrc, errline);
         } while(0);
     }
 }
@@ -1694,58 +1697,44 @@ int main(int argc, char **argv) {
             switch(argv[i][1]) {
                 case 'h':
                 case '?':
-                    showhelp();
-                    return EXIT_FAILURE;
+                    showhelp(); return EXIT_FAILURE;
                 case 'L':
                     verboselisting = 1;
                 case 'l':
-                    listfilename = true_ptr;
-                    break;
+                    listfilename = true_ptr; break;
                 case 'd':
-                    if(argv[i][2]) {
-                        if(!findlabel(&argv[i][2])) {
-                            p = newlabel();
-                            p->name = my_strdup(&argv[i][2]);
-                            p->type = VALUE;
-                            p->value = 1;
-                            p->line = true_ptr;
-                            p->pass = 0;
-                        }
+                    if(argv[i][2] && !findlabel(&argv[i][2])) {
+                        p = newlabel();
+                        p->name = my_strdup(&argv[i][2]);
+                        p->type = VALUE;
+                        p->value = 1;
+                        p->line = true_ptr;
+                        p->pass = 0;
                     }
                     break;
                 case 'q':
-                    verbose = 0;
-                    break;
+                    verbose = 0; break;
                 default:
                     fatal_error("unknown option: %s", argv[i]);
             }  // switch
         } else {
             // converting this into a switch() will change the binary -qalle
-            if(notoption == 0) {
-                inputfilename = argv[i];
-            } else if(notoption == 1) {
-                outputfilename = argv[i];
-            } else if(notoption == 2) {
-                listfilename = argv[i];
-            } else {
-                fatal_error("unused argument: %s", argv[i]);
-            }
+            if     (notoption == 0) inputfilename  = argv[i];
+            else if(notoption == 1) outputfilename = argv[i];
+            else if(notoption == 2) listfilename   = argv[i];
+            else                    fatal_error("unused argument: %s", argv[i]);
             notoption++;
         }  // if...else
     }  // for
 
-    if(!inputfilename) {
-        fatal_error("No source file specified.");
-    }
+    if(!inputfilename) fatal_error("No source file specified.");
 
     strcpy(str, inputfilename);
     nameptr = strrchr(str, '.');  // nameptr = '.' ptr
-    if(nameptr && strchr(nameptr, '\\')) {
-        nameptr = 0;  // watch out for "dirname.ext\listfile"
-    }
-    if(!nameptr) {
-        nameptr = str + strlen(str);  // nameptr = inputfile extension
-    }
+    // watch out for "dirname.ext\listfile"
+    if(nameptr && strchr(nameptr, '\\')) nameptr = 0;
+    // nameptr = inputfile extension
+    if(!nameptr) nameptr = str + strlen(str);
 
     if(!outputfilename) {
         strcpy(nameptr, ".bin");
@@ -1767,27 +1756,19 @@ int main(int argc, char **argv) {
             strcpy(nameptr, ".s");
             f = fopen(str, "rb");
         }
-        if(f) {
-            inputfilename = my_strdup(str);
-        }
+        if(f) inputfilename = my_strdup(str);
     }
-    if(f) {
-        fclose(f);
-    }
+    if(f) fclose(f);
 
     // main assembly loop:
     p = 0;
 
     do {
         pass++;
-        if(pass == MAXPASSES || (p == lastlabel)) {
-            lastchance = 1;  // give up on too many tries or no progress made
-        }
-        if(lastchance) {
-            message("last try..\n");
-        } else {
-            message("pass %i..\n", pass);
-        }
+        // give up on too many tries or no progress made
+        if(pass == MAXPASSES || (p == lastlabel)) lastchance = 1;
+        if(lastchance) message("last try..\n");
+        else           message("pass %i..\n", pass);
         needanotherpass = 0;
         skipline[0] = 0;
         scope = 1;
@@ -1797,15 +1778,13 @@ int main(int argc, char **argv) {
         p = lastlabel;
         nameptr = inputfilename;
         include(0, &nameptr);  // start assembling srcfile
-        if(errmsg) {
-            // todo - shouldn't this set error?
-            fputs(errmsg, stderr);  // bad inputfile??
-        }
+        // todo - shouldn't this set error?
+        if(errmsg) fputs(errmsg, stderr);  // bad inputfile??
     // while no hard errors, not final try, and labels are still unresolved
     } while(!error && !lastchance && needanotherpass);
 
     if(outputfile) {
-        // Be sure last of output file is written properly
+        // be sure last of output file is written properly
         int result;
 
         if(fwrite(outputbuff, 1, outcount, outputfile) < (size_t)outcount || fflush(outputfile)) {
@@ -1816,32 +1795,23 @@ int main(int argc, char **argv) {
 
         result = fclose(outputfile);
         outputfile = NULL;  // prevent fatal_error() from trying to close file again
-        if(result) {
-            fatal_error("Write error.");
-        }
+        if(result) fatal_error("Write error.");
 
-        if(!error) {
-            message("%s written (%i bytes).\n", outputfilename, i);
-        } else {
-            remove(outputfilename);
-        }
+        if(!error) message("%s written (%i bytes).\n", outputfilename, i);
+        else       remove(outputfilename);
     } else {
-        if(!error) {
-            fputs("nothing to do!", stderr);
-        }
+        if(!error) fputs("nothing to do!", stderr);
         error = 1;
     }
 
-    if(listfile) {
-        listline(0, 0);
-    }
+    if(listfile) listline(0, 0);
     return error ? EXIT_FAILURE : 0;
 }
 
-unsigned char listbuff[LISTMAX];  // used by output(), listline()
+byte listbuff[LISTMAX];  // used by output(), listline()
 int listcount;  // used by output(), listline()
 
-void output(unsigned char *p, int size) {
+void output(byte *p, int size) {
     static int oldpass = 0;
 
     /* static int noentry = 0;
@@ -1857,14 +1827,10 @@ void output(unsigned char *p, int size) {
 
     addr += size;
 
-    if(nooutput) {
-        return;
-    }
+    if(nooutput) return;
     if(oldpass != pass) {
         oldpass = pass;
-        if(outputfile) {
-            fclose(outputfile);
-        }
+        if(outputfile) fclose(outputfile);
         outputfile = fopen(outputfilename, "wb");
         outcount = 0;
         if(!outputfile) {
@@ -1872,21 +1838,15 @@ void output(unsigned char *p, int size) {
             return;
         }
     }
-    if(!outputfile) {
-        return;
-    }
+    if(!outputfile) return;
 
     while(size--) {
-        if(listfile && listcount < LISTMAX) {
-            listbuff[listcount] = *p;
-        }
+        if(listfile && listcount < LISTMAX) listbuff[listcount] = *p;
         listcount++;
         outputbuff[outcount++] = *p;
         p++;
         if(outcount >= BUFFSIZE) {
-            if(fwrite(outputbuff, 1, BUFFSIZE, outputfile) < BUFFSIZE) {
-                errmsg = "Write error.";
-            }
+            if(fwrite(outputbuff, 1, BUFFSIZE, outputfile) < BUFFSIZE) errmsg = "Write error.";
             outcount = 0;
         }
     }
@@ -1895,7 +1855,6 @@ void output(unsigned char *p, int size) {
 static void output_le(int n, int size) {
     // Outputs integer as little-endian. See readme.txt for proper usage.
     char b[2] = {n, n >> 8};
-
     output(b, size);
 }
 
@@ -1906,16 +1865,12 @@ void listline(char *src, char *comment) {
     static int oldpass = 0;
     int i;
 
-    if(!listfilename) {
-        return;
-    }
+    if(!listfilename) return;
 
     if(oldpass != pass) {
         // new pass = new listfile
         oldpass = pass;
-        if(listfile) {
-            fclose(listfile);
-        }
+        if(listfile) fclose(listfile);
         listfile = fopen(listfilename, "w");
         if(!listfile) {
             listfilename = 0;  // stop trying
@@ -1945,16 +1900,11 @@ void listline(char *src, char *comment) {
     listcount = 0;
 
     if(src) {
-        if(addr < 0) {
-            fprintf(listfile, "     ");
-        } else {
-            fprintf(listfile, "%05X", (int)addr);
-        }
+        if(addr < 0) fprintf(listfile, "     ");
+        else         fprintf(listfile, "%05X", (int)addr);
 
         strcpy(srcbuff, src);  // make a copy of the original source line
-        if(comment) {
-            strcat(srcbuff, comment);
-        }
+        if(comment) strcat(srcbuff, comment);
     } else {
         fclose(listfile);
         message("%s written.\n", listfilename);
@@ -2007,12 +1957,7 @@ void base(label *id, char **next) {
 
     dependant = 0;
     val = eval(next, WHOLEEXP);
-    // converting this into a ternary expression will change the binary -qalle
-    if(!dependant && !errmsg) {
-        addr = val;
-    } else {
-        addr = NOORIGIN;  // undefine origin
-    }
+    addr = (!dependant && !errmsg ? val : NOORIGIN);  // undefine origin if false
 }
 
 void nothing(label *id, char **next) {
@@ -2055,15 +2000,9 @@ void incbin(label *id, char **next) {
 
         // file seek
         seekpos = 0;
-        if(eatchar(next, ',')) {
-            seekpos = eval(next, WHOLEEXP);
-        }
-        if(!errmsg && !dependant && (seekpos < 0 || seekpos > filesize)) {
-            errmsg = SeekOutOfRange;
-        }
-        if(errmsg) {
-            break;
-        }
+        if(eatchar(next, ',')) seekpos = eval(next, WHOLEEXP);
+        if(!errmsg && !dependant && (seekpos < 0 || seekpos > filesize)) errmsg = SeekOutOfRange;
+        if(errmsg) break;
         fseek(f, seekpos, SEEK_SET);
 
         // get size
@@ -2072,31 +2011,21 @@ void incbin(label *id, char **next) {
             if(!errmsg && !dependant && (bytesleft < 0 || bytesleft > filesize - seekpos)) {
                 errmsg = BadIncbinSize;
             }
-            if(errmsg) {
-                break;
-            }
+            if(errmsg) break;
         } else {
             bytesleft = filesize - seekpos;
         }
 
         // read file
         while(bytesleft) {
-            // converting this into a ternary expression will change the binary -qalle
-            if(bytesleft > BUFFSIZE) {
-                i = BUFFSIZE;
-            } else {
-                i = bytesleft;
-            }
-
+            i = (bytesleft > BUFFSIZE ? BUFFSIZE : bytesleft);
             fread(inputbuff, 1, i, f);
             output(inputbuff, i);
             bytesleft -= i;
         }
     } while(0);
 
-    if(f) {
-        fclose(f);
-    }
+    if(f) fclose(f);
 }
 
 void hex(label *id, char **next) {
@@ -2135,11 +2064,8 @@ void dw(label *id, char **next) {
     do {
         val = eval(next, WHOLEEXP);
         if(!errmsg) {
-            if(val > 65535 || val < -65536) {
-                errmsg = OutOfRange;
-            } else {
-                output_le(val, 2);
-            }
+            if(val > 0xffff || val < -0x10000) errmsg = OutOfRange;
+            else                               output_le(val, 2);
         }
     } while(!errmsg && eatchar(next, ','));
 }
@@ -2149,9 +2075,7 @@ void dl(label *id, char **next) {
 
     do {
         val = eval(next, WHOLEEXP) & 0xff;
-        if(!errmsg) {
-            output(&val, 1);
-        }
+        if(!errmsg) output(&val, 1);
     } while(!errmsg && eatchar(next, ','));
 }
 
@@ -2160,9 +2084,7 @@ void dh(label *id, char **next) {
 
     do {
         val = eval(next, WHOLEEXP) >> 8;
-        if(!errmsg) {
-            output(&val, 1);
-        }
+        if(!errmsg) output(&val, 1);
     } while(!errmsg && eatchar(next, ','));
 }
 
@@ -2181,29 +2103,19 @@ void db(label *id, char **next) {
             do {
                 c = *s;
                 s++;
-                if(!c) {
-                    errmsg = IncompleteExp;
-                }
-                if(c == '\\') {
-                    s++;
-                }
+                if(!c) errmsg = IncompleteExp;
+                if(c == '\\') s++;
             } while(!errmsg && c != quote);
 
-            if(errmsg) {
-                continue;
-            }
+            if(errmsg) continue;
             s--;  // point to the "
             *s = '0';
             *next = (char*)s;
             val2 = eval(next, WHOLEEXP);
-            if(errmsg) {
-                continue;
-            }
+            if(errmsg) continue;
 
             while(start != s) {
-                if(*start == '\\') {
-                    start++;
-                }
+                if(*start == '\\') start++;
                 val = *start + val2;
                 start++;
                 output_le(val, 1);
@@ -2211,11 +2123,8 @@ void db(label *id, char **next) {
         } else {
             val = eval(next, WHOLEEXP);
             if(!errmsg) {
-                if(val > 255 || val < -128) {
-                    errmsg = OutOfRange;
-                } else {
-                    output_le(val, 1);
-                }
+                if(val > 0xff || val < -0x80) errmsg = OutOfRange;
+                else                          output_le(val, 1);
             }
         }
     } while(!errmsg && eatchar(next, ','));
@@ -2226,19 +2135,10 @@ void dsw(label *id, char **next) {
 
     dependant = 0;
     count = eval(next, WHOLEEXP);
-    if(dependant || (count < 0 && needanotherpass)) {
-        // unknown count! don't do anything
-        count = 0;
-    }
-    if(eatchar(next, ',')) {
-        val = eval(next, WHOLEEXP);
-    }
-    if(!errmsg && !dependant && (val > 65535 || val < -32768 || count < 0)) {
-        errmsg = OutOfRange;
-    }
-    if(errmsg) {
-        return;
-    }
+    if(dependant || (count < 0 && needanotherpass)) count = 0;  // unknown count! don't do anything
+    if(eatchar(next, ',')) val = eval(next, WHOLEEXP);
+    if(!errmsg && !dependant && (val > 65535 || val < -32768 || count < 0)) errmsg = OutOfRange;
+    if(errmsg) return;
     while(count--) {
         output_le(val, 2);
     }
@@ -2248,18 +2148,12 @@ void filler(int count, char **next) {
     // used by dsb(), align(), pad()
     int val = defaultfiller;
 
-    if(dependant || (count < 0 && needanotherpass)) {  // unknown count! don't do anything
-        count = 0;
-    }
-    if(eatchar(next, ',')) {
-        val = eval(next, WHOLEEXP);
-    }
+    if(dependant || (count < 0 && needanotherpass)) count = 0;  // unknown count! don't do anything
+    if(eatchar(next, ',')) val = eval(next, WHOLEEXP);
     if(!errmsg && !dependant && (val > 255 || val < -128 || count < 0 || count > 0x100000)) {
         errmsg = OutOfRange;
     }
-    if(errmsg) {
-        return;
-    }
+    if(errmsg) return;
     while(count--) {  // !#@$
         output_le(val, 1);
     }
@@ -2279,16 +2173,8 @@ void align(label *id, char **next) {
     dependant = 0;
     count = eval(next, WHOLEEXP);
 
-    // merging if()s here will change the binary -qalle
-    if(count >= 0) {
-        if((unsigned int)addr % count) {
-            count -= (unsigned int)addr % count;
-        } else {
-            count = 0;
-        }
-    } else {
-        count = 0;
-    }
+    if(count >= 0 && (unsigned int)addr % count) count -= (unsigned int)addr % count;
+    else                                         count = 0;
 
     filler(count, next);
 }
@@ -2306,11 +2192,8 @@ void pad(label *id, char **next) {
 }
 
 void org(label *id, char **next) {
-    if(addr < 0) {
-        base(id, next);  // this is the first ORG; PC hasn't been set yet
-    } else {
-        pad(id, next);
-    }
+    if(addr < 0) base(id, next);  // this is the first ORG; PC hasn't been set yet
+    else         pad(id, next);
 }
 
 void opcode(label *id, char **next) {
@@ -2330,15 +2213,13 @@ void opcode(label *id, char **next) {
 
         if(type != IMP && type != ACC) {
             // get operand
-            if(!eatchar(&s, ophead[type])) {
-                continue;
-            }
+            if(!eatchar(&s, ophead[type])) continue;
             val = eval(&s, WHOLEEXP);
 
             if(type == REL) {
                 if(!dependant) {
                     val -= addr + 2;
-                    if(val > 127 || val < -128) {
+                    if(val > 0x7f || val < -0x80) {
                         needanotherpass = 1;  // give labels time to sort themselves out..
                         if(lastchance) {
                             errmsg = "Branch out of range.";
@@ -2349,9 +2230,7 @@ void opcode(label *id, char **next) {
             } else {
                 if(opsize[type] == 1) {
                     if(!dependant) {
-                        if(val > 255 || val < -128) {
-                            errmsg = OutOfRange;
-                        }
+                        if(val > 0xff || val < -0x80) errmsg = OutOfRange;
                     } else if(type != IMM) {
                         continue;  // default to non-ZP instruction
                     }
@@ -2360,47 +2239,34 @@ void opcode(label *id, char **next) {
                 }
             }
 
-            if(errmsg && !dependant && !forceRel) {
-                continue;
-            }
+            if(errmsg && !dependant && !forceRel) continue;
         }  // if
 
         my_strupr(s);
         s2 = optail[type];
 
         while(*s2) {  // opcode tail should match input:
-            if(!eatchar(&s, *s2)) {
-                break;
-            }
+            if(!eatchar(&s, *s2)) break;
             s2++;
         }
 
         s += strspn(s, whitesp);
-        if(*s || *s2) {
-            continue;
-        }
-        if(addr > 0xffff) {
-            errmsg = "PC out of range.";
-        }
+        if(*s || *s2) continue;
+        if(addr > 0xffff) errmsg = "PC out of range.";
         output(op, 1);
         output_le(val, opsize[type]);
         *next += s - tmpstr;
         return;
     }  // for
 
-    if(!errmsg) {
-        errmsg = Illegal;
-    }
+    if(!errmsg) errmsg = Illegal;
 }
 
 void _if(label *id, char **next) {
     int val;
 
-    if(iflevel >= IFNESTS - 1) {
-        errmsg = IfNestLimit;
-    } else {
-        iflevel++;
-    }
+    if(iflevel >= IFNESTS - 1) errmsg = IfNestLimit;
+    else                       iflevel++;
 
     dependant = 0;
     val = eval(next, WHOLEEXP);
@@ -2418,11 +2284,8 @@ void _if(label *id, char **next) {
 void ifdef(label *id, char **next) {
     char s[WORDMAX];
 
-    if(iflevel >= IFNESTS - 1) {
-        errmsg = IfNestLimit;
-    } else {
-        iflevel++;
-    }
+    if(iflevel >= IFNESTS - 1) errmsg = IfNestLimit;
+    else                       iflevel++;
 
     getlabel(s, next);
     skipline[iflevel] = !(ptrdiff_t)findlabel(s) || skipline[iflevel - 1];
@@ -2432,11 +2295,8 @@ void ifdef(label *id, char **next) {
 void ifndef(label *id, char **next) {
     char s[WORDMAX];
 
-    if(iflevel >= IFNESTS - 1) {
-        errmsg = IfNestLimit;
-    } else {
-        iflevel++;
-    }
+    if(iflevel >= IFNESTS - 1) errmsg = IfNestLimit;
+    else                       iflevel++;
 
     getlabel(s, next);
     skipline[iflevel] = (ptrdiff_t)findlabel(s) || skipline[iflevel - 1];
@@ -2469,19 +2329,13 @@ void elseif(label *id, char **next) {
 }
 
 void _else(label *id, char **next) {
-    if(iflevel) {
-        skipline[iflevel] = ifdone[iflevel] || skipline[iflevel - 1];
-    } else {
-        errmsg = "ELSE without IF.";
-    }
+    if(iflevel) skipline[iflevel] = ifdone[iflevel] || skipline[iflevel - 1];
+    else        errmsg = "ELSE without IF.";
 }
 
 void endif(label *id, char **next) {
-    if(iflevel) {
-        --iflevel;
-    } else {
-        errmsg = "ENDIF without IF.";
-    }
+    if(iflevel) --iflevel;
+    else        errmsg = "ENDIF without IF.";
 }
 
 void endm(label *id, char **next) {
@@ -2499,18 +2353,12 @@ void macro(label *id, char **next) {
     int params;
 
     labelhere = 0;
-    if(getlabel(word, next)) {
-        addlabel(word, 0);
-    } else {
-        errmsg = NeedName;
-    }
+    if(getlabel(word, next)) addlabel(word, 0);
+    else                     errmsg = NeedName;
 
     makemacro = true_ptr;  // flag for processline to skip to ENDM
 
-    if(errmsg) {
-        // no valid macro name
-        return;
-    }
+    if(errmsg) return;  // no valid macro name
 
     if(labelhere->type == LABEL) {
         // new macro
@@ -2535,8 +2383,7 @@ void macro(label *id, char **next) {
     } else if(labelhere->type != MACRO) {
         errmsg = LabelDefined;
     } else {
-        // macro was defined on a previous pass.. skip past params
-        **next = 0;
+        **next = 0;  // macro was defined on a previous pass.. skip past params
     }
 }
 
@@ -2572,9 +2419,7 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
         s2 = s;                    // s2 = param end
         s3 = strpbrk(s2, ",'\"");  // stop at param end or string definition
 
-        if(!s3) {
-            s3 = strchr(s2, 0);
-        }
+        if(!s3) s3 = strchr(s2, 0);
         c = *s3;
 
         if(c == '"' || c == '\'') {  // go to end of string
@@ -2583,14 +2428,10 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
             do {
                 c2 = *s3;
                 s3++;
-                if(c2 == '\\') {
-                    s3++;
-                }
+                if(c2 == '\\') s3++;
             } while(c2 && c2 != c);
 
-            if(!c2) {
-                s3--;  // oops.. too far
-            }
+            if(!c2) s3--;  // oops.. too far
             c = *s3;
         }
 
@@ -2621,8 +2462,7 @@ void expandmacro(label *id, char **next, int errline, char *errsrc) {
     // {..}
 
     while(arg++ < args) {
-        // skip any unused arg names
-        line = (char**)*line;
+        line = (char**)*line;  // skip any unused arg names
     }
 
     while(line) {
@@ -2642,9 +2482,7 @@ char *repttext;  // used by rept(), expandrept(); rept chain begins here
 void rept(label *id, char **next) {
     dependant = 0;
     rept_loops = eval(next, WHOLEEXP);
-    if(dependant || errmsg || rept_loops < 0) {
-        rept_loops = 0;
-    }
+    if(dependant || errmsg || rept_loops < 0) rept_loops = 0;
     makerept = &repttext;
     repttext = 0;
     reptcount++;  // tell processline to start storing up rept lines
@@ -2693,9 +2531,7 @@ void _enum(label *id, char **next) {
     val = eval(next, WHOLEEXP);
     // if(!dependant && !errmsg) {
     // }
-    if(!nooutput) {
-        enum_saveaddr = addr;
-    }
+    if(!nooutput) enum_saveaddr = addr;
     addr = val;
     nooutput = 1;
 }

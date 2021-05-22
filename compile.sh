@@ -2,4 +2,3 @@
 gcc -Os -Wno-unused-result -o asm6 asm6.c
 gzip --best asm6
 mv asm6.gz bin/
-
