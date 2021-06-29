@@ -1,5 +1,3 @@
-# Warning: this script DELETES files. Run at your own risk.
-
 # compile both with same filename or binaries will differ
 cp asm6.c temp.c
 gcc -Os -Wno-unused-result -o temp-orig temp.c
